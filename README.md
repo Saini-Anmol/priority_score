@@ -2,7 +2,7 @@
 
 A comprehensive manufacturing priority and deployment analysis system designed to optimize tire production planning through intelligent demand prioritization and machine deployment analysis.
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Features](#features)
@@ -14,35 +14,35 @@ A comprehensive manufacturing priority and deployment analysis system designed t
 - [Usage](#usage)
 - [Output Reports](#output-reports)
 
-## 🎯 Overview
+## Overview
 
 The Vector Supply Chain Intelligence System is a two-stage analytical tool that helps manufacturing plants optimize production by:
 
 1. **Stage 1**: Analyzing demand signals across multiple markets and locations to rank SKUs by priority
 2. **Stage 2**: Comparing high-priority SKUs with current machine deployment to identify critical gaps and optimization opportunities
 
-## ✨ Features
+## Features
 
 ### Stage 1: Demand Prioritization
 
-- 📊 Multi-factor priority scoring based on:
+- Multi-factor priority scoring based on:
   - Market importance (OE, ST, EXP, RE)
   - Penetration levels
   - Requirement quantities
   - Location types (JIT, Depot, Feeder, etc.)
-- 💰 Revenue potential analysis using ASP and curing cycle times
-- 🎯 Dual ranking system (Demand+Inventory vs. Demand+Inventory+Price)
-- 📈 Inventory criticality scoring (Red/Black stockout analysis)
+- Revenue potential analysis using ASP and curing cycle times
+- Dual ranking system (Demand+Inventory vs. Demand+Inventory+Price)
+- Inventory criticality scoring (Red/Black stockout analysis)
 
 ### Stage 2: Machine Deployment Analysis
 
-- 🏭 Current production status tracking
-- 🔍 Critical gap identification (high-priority SKUs not in production)
-- ⚠️ Excess production alerts (low-priority SKUs using many machines)
-- 🔧 Mould health monitoring
-- 📉 Proxy Penetration calculation (adjusts urgency based on active production)
+- Current production status tracking
+- Critical gap identification (high-priority SKUs not in production)
+- Excess production alerts (low-priority SKUs using many machines)
+- Mould health monitoring
+- Proxy Penetration calculation (adjusts urgency based on active production)
 
-## 🚀 Installation
+## Installation
 
 ### Prerequisites
 
@@ -147,7 +147,7 @@ You'll be prompted to enter:
 
 The system will process all dates in the range and generate a multi-sheet Excel report.
 
-## 🏭 Stage 2: Machine Deployment Analysis
+## Stage 2: Machine Deployment Analysis
 
 ### What It Does
 
@@ -313,7 +313,7 @@ EXCESS_MACHINE_COUNT = 2  # Machine count threshold
 MOULD_LIFE_THRESHOLD = 0.9
 ```
 
-## 📈 Output Reports
+## Output Reports
 
 ### Understanding Priority Scores
 
@@ -371,17 +371,6 @@ MOULD_LIFE_THRESHOLD = 0.9
 
 - Processing many dates can be memory-intensive
 - Consider processing in smaller batches
-
-## 📝 License
-
-This project is proprietary and confidential.
-
-## 👤 Author
-
-**Anmol Saini**
-
-- GitHub: [@Saini-Anmol](https://github.com/Saini-Anmol)
-- Repository: [priority_score](https://github.com/Saini-Anmol/priority_score)
 
 ---
 
