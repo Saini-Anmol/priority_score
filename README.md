@@ -223,11 +223,11 @@ Production Status:
   • SKUs NOT in production: 858
 
 Action Required:
-  • 🔴 Critical Gaps (High-priority, not running): 12
-  • ⚠️  Excess Production (Low-priority, many machines): 5
-  • 🔧 Mould Alerts (Nearing end of life): 3
+  • Critical Gaps (High-priority, not running): 12
+  • Excess Production (Low-priority, many machines): 5
+  • Mould Alerts (Nearing end of life): 3
 
-⚠️  ATTENTION: 12 high-priority SKUs are not in production!
+ ATTENTION: 12 high-priority SKUs are not in production!
    Review the 'CriticalGap' column in the report.
 ```
 
