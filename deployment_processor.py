@@ -100,7 +100,6 @@ def _build_ghost_sku_rows(mould_df: pd.DataFrame, demand_df: pd.DataFrame) -> pd
     ghost_rows['MachineCount']               = ghost_mould['MachineCount'].values
     ghost_rows['AvgMouldHealth']             = ghost_mould['AvgMouldHealth'].values
     ghost_rows['ConsolidatedPriorityScore']  = ghost_score
-    ghost_rows['ConsolidatedPriorityScore_p']= ghost_score
     ghost_rows['IsGhostSKU']                 = True
 
     print(f"[Stage 2] Ghost SKUs detected (running but no Vector demand): {len(ghost_rows)}")
@@ -265,7 +264,7 @@ def process_deployment_analysis(demand_df, date_str):
         'Penetration', 'NormPenetration', 'NormRequirement',
         'PriorityScore_Inventory', 'NormInventoryScore',
         'PriorityScore',
-        'ConsolidatedPriorityScore', 'ConsolidatedPriorityScore_p',
+        'ConsolidatedPriorityScore',
         'ProxyPenetration', 'ProxyRank',
         'ASP', 'daily_cure', 'rev_pot', 'price_priority',
         'MarketWeight', 'TopSKUFlag',
@@ -303,7 +302,6 @@ def process_deployment_analysis(demand_df, date_str):
         # --- Group 8: Scoring & Ranking ---
         'PriorityScore',
         'ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore',
-        'ConsolidatedPriorityScore_p', 'Rank_ConsolidatedPriorityScore_p',
     ]
 
     # Only include columns that actually exist in this run

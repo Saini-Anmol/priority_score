@@ -42,8 +42,10 @@ def process_single_date(date_str):
     pivoted['PriorityScore_Inventory'] = 0
     for loc, weight in config.LOCATION_WEIGHTS.items():
         b_col, r_col = f'Black Count_{loc}', f'Red Count_{loc}'
-        if b_col in pivoted.columns: pivoted['PriorityScore_Inventory'] += pivoted[b_col] * weight
-        if r_col in pivoted.columns: pivoted['PriorityScore_Inventory'] += pivoted[r_col] * (weight * 0.5)
+        if b_col in pivoted.columns:
+            pivoted['PriorityScore_Inventory'] += pivoted[b_col] * weight * config.INVENTORY_SCORE_FACTORS["black"]
+        if r_col in pivoted.columns:
+            pivoted['PriorityScore_Inventory'] += pivoted[r_col] * weight * config.INVENTORY_SCORE_FACTORS["red"]
 
     # --- DEMAND SCORING (BOR & BMR) ---
     bor_v = bor_v[bor_v['Location Code'].str.startswith('1300')].copy()
@@ -51,24 +53,25 @@ def process_single_date(date_str):
     bor_v['Market'] = bor_v['Market'].astype(str)  # Ensure string type
     
     # --- STRATEGIC NORM ADJUSTMENT ---
-    # Apply conditional multipliers based on Market type
-    # RE (Replacement) market: 50% adjustment, OE/EXP: 100% (no adjustment)
-    # Use Virtual Norm as the baseline for all calculations
+    # Adjusted_Target drives Requirement:
+    #   RE market: 50% of Virtual Norm (conservative target)
+    #   OE / EXP:  100% of Virtual Norm
     bor_v['Adjusted_Target'] = bor_v.apply(
         lambda row: row['Virtual Norm'] * 0.5 if row['Market'] == 'RE' else row['Virtual Norm'],
         axis=1
     )
     
-    # Calculate Requirement using Adjusted_Target (ensure non-negative)
     # Requirement = max(0, Adjusted_Target - Stock)
+    # RE gets 50% virtual norm target; OE/EXP get full virtual norm target
     bor_v['Requirement'] = np.maximum(bor_v['Adjusted_Target'] - bor_v['Stock'], 0)
     
-    # Calculate Penetration using Adjusted_Target
-    # Penetration = (Adjusted_Target - Stock) / Adjusted_Target * 100
+    # Penetration ALWAYS uses 100% Virtual Norm as the baseline (config requirement).
+    # This gives a true picture of buffer depletion regardless of market type.
+    # Penetration = (Virtual Norm - Stock) / Virtual Norm * 100
     bor_v['Penetration'] = np.where(
-        bor_v['Adjusted_Target'] == 0, 
-        0, 
-        (bor_v['Adjusted_Target'] - bor_v['Stock']) / bor_v['Adjusted_Target'] * 100
+        bor_v['Virtual Norm'] == 0,
+        0,
+        (bor_v['Virtual Norm'] - bor_v['Stock']) / bor_v['Virtual Norm'] * 100
     )
     bor_v = bor_v.merge(bpr_v[['SKUCode', 'Location Code', 'Top SKU']], on=['SKUCode', 'Location Code'], how='left')
 
@@ -113,12 +116,6 @@ def process_single_date(date_str):
     combined = combined.merge(pivoted[['SKUCode', 'PriorityScore_Inventory']], on='SKUCode', how='left').fillna(0)
     combined['NormInventoryScore'] = combined['PriorityScore_Inventory'] / combined['PriorityScore_Inventory'].max()
 
-    # TIER 1 CONSOLIDATED SCORE (Demand + Inventory only)
-    combined['ConsolidatedPriorityScore'] = (
-        combined['PriorityScore'] * config.TIER1_WEIGHTS["demand_priority"] +
-        combined['NormInventoryScore'] * config.TIER1_WEIGHTS["inventory_priority"]
-    )
-
     dispatch = pd.read_csv(f"{config.BASE_DATA_PATH}/DISPATCH1.csv", encoding='ISO-8859-1')
     dispatch['Amt.in loc.cur.'] = dispatch['Amt.in loc.cur.'].replace({',': ''}, regex=True)
     dispatch['Amt.in loc.cur.'] = pd.to_numeric(dispatch['Amt.in loc.cur.'], errors='coerce')
@@ -135,19 +132,19 @@ def process_single_date(date_str):
     combined['rev_pot'] = combined['ASP'] * combined['daily_cure']
     combined['price_priority'] = combined['rev_pot'] / combined['rev_pot'].max()
 
-    # TIER 2 CONSOLIDATED SCORE (Demand + Inventory + Price)
-    combined['ConsolidatedPriorityScore_p'] = (
-        combined['PriorityScore'] * config.TIER2_WEIGHTS["demand_priority"] +
-        combined['NormInventoryScore'] * config.TIER2_WEIGHTS["inventory_priority"] +
-        combined['price_priority'] * config.TIER2_WEIGHTS["price_priority"]
+    # CONSOLIDATED SCORE (Demand + Inventory + Price)
+    # Weights are fully configurable. Set price_priority = 0 for pure Demand+Inventory scoring.
+    combined['ConsolidatedPriorityScore'] = (
+        combined['PriorityScore'] * config.CONSOLIDATED_WEIGHTS["demand_priority"] +
+        combined['NormInventoryScore'] * config.CONSOLIDATED_WEIGHTS["inventory_priority"] +
+        combined['price_priority'] * config.CONSOLIDATED_WEIGHTS["price_priority"]
     )
 
-    # DUAL RANKING SYSTEM (matching original script)
+    # SINGLE RANKING — one consolidated score, one rank
     combined['Rank_ConsolidatedPriorityScore'] = combined['ConsolidatedPriorityScore'].rank(ascending=False, method='min')
-    combined['Rank_ConsolidatedPriorityScore_p'] = combined['ConsolidatedPriorityScore_p'].rank(ascending=False, method='min')
 
-    # Sort by both ranks (matching original)
-    combined = combined.sort_values(by=['Rank_ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore_p'], ascending=[True, True])
+    # Sort by consolidated rank
+    combined = combined.sort_values(by='Rank_ConsolidatedPriorityScore', ascending=True)
 
     # SELECT ONLY REQUIRED COLUMNS (matching original output)
     # Columns ordered to tell a clear left-to-right story:
@@ -181,7 +178,6 @@ def process_single_date(date_str):
         # --- Group 7: Scoring & Ranking ---
         'PriorityScore',
         'ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore',
-        'ConsolidatedPriorityScore_p', 'Rank_ConsolidatedPriorityScore_p',
     ]
     
     # Only select columns that exist

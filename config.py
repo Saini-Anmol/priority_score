@@ -117,20 +117,21 @@ SCORING_PARAMS = {
 }
 
 # ---------------------------------------------------------------------------
-# 7. TIER 1 CONSOLIDATED WEIGHTS  (Demand + Inventory)
+# 7. INVENTORY SCORE FACTORS  (Black vs Red stockout contribution)
 # ---------------------------------------------------------------------------
-TIER1_WEIGHTS = {
-    "demand_priority":    float(_get("TIER1_demand_priority")),    # Market/Penetration/Requirement
-    "inventory_priority": float(_get("TIER1_inventory_priority")), # Red/Black stockouts
+INVENTORY_SCORE_FACTORS = {
+    "black": float(_get("INVENTORY_BLACK_FACTOR")),  # Weight multiplier for Black stockouts
+    "red":   float(_get("INVENTORY_RED_FACTOR")),    # Weight multiplier for Red stockouts
 }
 
 # ---------------------------------------------------------------------------
-# 8. TIER 2 CONSOLIDATED WEIGHTS  (Demand + Inventory + Price)
+# 8. CONSOLIDATED SCORE WEIGHTS  (Demand + Inventory + Price)
+# Set price_priority = 0 to get pure Demand+Inventory scoring (former Tier 1)
 # ---------------------------------------------------------------------------
-TIER2_WEIGHTS = {
-    "demand_priority":    float(_get("TIER2_demand_priority")),    # Market/Penetration/Requirement
-    "inventory_priority": float(_get("TIER2_inventory_priority")), # Red/Black stockouts
-    "price_priority":     float(_get("TIER2_price_priority")),     # Revenue/Daily capacity
+CONSOLIDATED_WEIGHTS = {
+    "demand_priority":    float(_get("CONSOLIDATED_demand_priority")),    # Market/Penetration/Requirement
+    "inventory_priority": float(_get("CONSOLIDATED_inventory_priority")), # Red/Black stockouts
+    "price_priority":     float(_get("CONSOLIDATED_price_priority")),     # Revenue/Daily capacity
 }
 
 # ---------------------------------------------------------------------------

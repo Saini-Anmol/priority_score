@@ -333,7 +333,7 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
         'Penetration', 'NormPenetration', 'NormRequirement',
         'PriorityScore_Inventory', 'NormInventoryScore',
         'PriorityScore',
-        'ConsolidatedPriorityScore', 'ConsolidatedPriorityScore_p',
+        'ConsolidatedPriorityScore',
         'ProxyPenetration', 'ProxyRank',
         'ASP', 'daily_cure', 'rev_pot', 'price_priority',
         'MarketWeight', 'TopSKUFlag', 'ManualPriorityScore',
@@ -350,12 +350,12 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
             hybrid_df[col] = hybrid_df[col].fillna('')
 
     # ---- Step 7: Unified StrategicPriorityScore (fully populated for every row) ----
-    # Manual  → ManualPriorityScore  (super-boost value, e.g. 10–11)
-    # Automated → ConsolidatedPriorityScore_p (Tier-2 demand + inventory + price)
+    # Manual     → ManualPriorityScore   (super-boost value, e.g. 10–11)
+    # Automated  → ConsolidatedPriorityScore (single configurable Demand+Inventory+Price score)
     hybrid_df["StrategicPriorityScore"] = np.where(
         hybrid_df["Source"] == "Manual",
         hybrid_df["ManualPriorityScore"],
-        hybrid_df.get("ConsolidatedPriorityScore_p", pd.Series(0.0, index=hybrid_df.index))
+        hybrid_df.get("ConsolidatedPriorityScore", pd.Series(0.0, index=hybrid_df.index))
     )
 
     # ---- Step 8: Overstock penalty — push Penetration > 100% rows to bottom ----
@@ -409,7 +409,6 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
         # --- Group 10: Detailed Scoring Components ---
         'PriorityScore',
         'ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore',
-        'ConsolidatedPriorityScore_p', 'Rank_ConsolidatedPriorityScore_p',
     ]
 
     # Safe selection: only include columns present in the hybrid DataFrame

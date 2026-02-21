@@ -39,13 +39,15 @@ stage1_rows = [
     ("SCORING_penetration_weightage",      0.35, ""),
     ("SCORING_requirement_weightage",      0.30, ""),
     ("SCORING_top_sku_weightage",          0.10, ""),
-    # --- Tier 1 Weights ---
-    ("TIER1_demand_priority",              0.6,  ""),
-    ("TIER1_inventory_priority",           0.4,  ""),
-    # --- Tier 2 Weights ---
-    ("TIER2_demand_priority",              0.4,  ""),
-    ("TIER2_inventory_priority",           0.3,  ""),
-    ("TIER2_price_priority",               0.3,  ""),
+    # --- Inventory Score Factors ---
+    # Black stockout contributes more than Red; adjust freely (e.g. 1.0 / 0.5)
+    ("INVENTORY_BLACK_FACTOR",             1.0,  ""),
+    ("INVENTORY_RED_FACTOR",               0.5,  ""),
+    # --- Consolidated Score Weights (Demand + Inventory + Price) ---
+    # Setting CONSOLIDATED_price_priority = 0 gives pure Demand+Inventory scoring
+    ("CONSOLIDATED_demand_priority",       0.4,  ""),
+    ("CONSOLIDATED_inventory_priority",    0.3,  ""),
+    ("CONSOLIDATED_price_priority",        0.3,  ""),
     # --- Production Constants ---
     ("EFFICIENCY_FACTOR",                  0.9,  ""),
     ("DEFAULT_ASP",                        3000, ""),
