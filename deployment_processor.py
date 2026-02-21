@@ -57,37 +57,92 @@ def clean_mould_report(date_str):
         return None
 
 
+def _build_ghost_sku_rows(mould_df: pd.DataFrame, demand_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Full Outer Join — Stage 2 half:
+    Find SKUs present in the mould report but absent from Vector demand
+    ("Ghost Production") and return them as rows with imputed defaults.
+
+    Ghost SKUs receive:
+    - Requirement / Vector_Requirement = 0  (no active demand)
+    - Penetration                       = 0
+    - Market                            = GHOST_SKU_MARKET
+    - IsGhostSKU                        = True
+    - ConsolidatedPriorityScore(_p)     = min(existing) * 0.5
+      → guaranteed below every real SKU without hardcoding
+    """
+    demand_skus = set(demand_df['SKUCode'].astype(str))
+    ghost_mask  = ~mould_df['SKUCode'].isin(demand_skus)
+    ghost_mould = mould_df[ghost_mask].copy()
+
+    if ghost_mould.empty:
+        return pd.DataFrame()
+
+    # Minimum existing score — ghost rows sit below this
+    score_floor = 0.0
+    for score_col in ['ConsolidatedPriorityScore_p', 'ConsolidatedPriorityScore']:
+        if score_col in demand_df.columns:
+            col_min = pd.to_numeric(demand_df[score_col], errors='coerce').min()
+            if pd.notna(col_min):
+                score_floor = float(col_min)
+                break
+    ghost_score = score_floor * 0.5  # always below the lowest real SKU
+
+    ghost_rows = pd.DataFrame()
+    ghost_rows['SKUCode']                    = ghost_mould['SKUCode'].values
+    ghost_rows['size']                       = pd.to_numeric(
+        ghost_mould['SKUCode'].str[8:10], errors='coerce').fillna(0).astype('Int64').values
+    ghost_rows['Market']                     = config_stage2.GHOST_SKU_MARKET
+    ghost_rows['Requirement']                = config_stage2.GHOST_SKU_REQUIREMENT
+    ghost_rows['Vector_Requirement']         = config_stage2.GHOST_SKU_REQUIREMENT
+    ghost_rows['Penetration']                = config_stage2.GHOST_SKU_PENETRATION
+    ghost_rows['Cure Time']                  = config_stage2.GHOST_SKU_CURE_TIME
+    ghost_rows['MachineCount']               = ghost_mould['MachineCount'].values
+    ghost_rows['AvgMouldHealth']             = ghost_mould['AvgMouldHealth'].values
+    ghost_rows['ConsolidatedPriorityScore']  = ghost_score
+    ghost_rows['ConsolidatedPriorityScore_p']= ghost_score
+    ghost_rows['IsGhostSKU']                 = True
+
+    print(f"[Stage 2] Ghost SKUs detected (running but no Vector demand): {len(ghost_rows)}")
+    return ghost_rows
+
+
 def merge_demand_with_deployment(demand_df, mould_df):
     """
-    Perform a left join between Demand Summary and Mould Report.
-    
+    Full Outer Join equivalent between Demand Summary and Mould Report.
+
+    - All demand SKUs are included (left join for mould metrics).
+    - Ghost SKUs (in mould but not in demand) are appended with imputed
+      defaults so factory operations have 100% visibility.
+
     Args:
         demand_df (pd.DataFrame): Output from Stage 1 (Demand Summary)
-        mould_df (pd.DataFrame): Cleaned mould data
-    
+        mould_df  (pd.DataFrame): Cleaned mould data
+
     Returns:
-        pd.DataFrame: Combined dataframe with deployment information
+        pd.DataFrame: Combined dataframe with full deployment visibility
     """
+    # Tag all real demand rows as non-ghost
+    demand_df['IsGhostSKU'] = False
+
     if mould_df is None or mould_df.empty:
-        # If no mould data, add empty columns
-        demand_df['MachineCount'] = 0
-        demand_df['AvgMouldHealth'] = 0
+        demand_df['MachineCount']  = 0
+        demand_df['AvgMouldHealth']= 0
         return demand_df
-    
-    # Ensure SKUCode is string type in demand data
+
+    # Ensure SKUCode is string type
     demand_df['SKUCode'] = demand_df['SKUCode'].astype(str)
-    
-    # Perform left join
-    merged_df = demand_df.merge(
-        mould_df,
-        on='SKUCode',
-        how='left'
-    )
-    
-    # Fill NaN values for SKUs not in production
-    merged_df['MachineCount'] = merged_df['MachineCount'].fillna(0).astype(int)
-    merged_df['AvgMouldHealth'] = merged_df['AvgMouldHealth'].fillna(0)
-    
+
+    # Left join: bring mould metrics onto demand rows
+    merged_df = demand_df.merge(mould_df, on='SKUCode', how='left')
+    merged_df['MachineCount']  = merged_df['MachineCount'].fillna(0).astype(int)
+    merged_df['AvgMouldHealth']= merged_df['AvgMouldHealth'].fillna(0)
+
+    # Append Ghost SKU rows (full outer join — right-side orphans)
+    ghost_df = _build_ghost_sku_rows(mould_df, demand_df)
+    if not ghost_df.empty:
+        merged_df = pd.concat([merged_df, ghost_df], ignore_index=True, sort=False)
+
     return merged_df
 
 
@@ -189,13 +244,68 @@ def process_deployment_analysis(demand_df, date_str):
     merged_df = apply_gap_flags(merged_df)
     
     # Summary statistics
-    critical_gaps = merged_df['CriticalGap'].sum()
-    excess_production = merged_df['ExcessProduction'].sum()
-    mould_alerts = merged_df['MouldAlert'].sum()
-    
+    critical_gaps    = merged_df['CriticalGap'].sum()
+    excess_production= merged_df['ExcessProduction'].sum()
+    mould_alerts     = merged_df['MouldAlert'].sum()
+    ghost_skus       = merged_df['IsGhostSKU'].sum() if 'IsGhostSKU' in merged_df.columns else 0
+
     print(f"[Stage 2] Analysis complete:")
-    print(f"  - Critical Gaps: {critical_gaps}")
-    print(f"  - Excess Production: {excess_production}")
-    print(f"  - Mould Alerts: {mould_alerts}")
-    
-    return merged_df
+    print(f"  - Critical Gaps      : {critical_gaps}")
+    print(f"  - Excess Production  : {excess_production}")
+    print(f"  - Mould Alerts       : {mould_alerts}")
+    print(f"  - Ghost SKUs (running, no demand): {ghost_skus}")
+
+    # --- DATA IMPUTATION: fill missing numeric values with 0 ---
+    # Ghost SKUs (and any other unmatched rows) will have NaN for demand/inventory
+    # columns that couldn't be populated. Zero is the correct sentinel: no demand,
+    # no stock, no score — which naturally keeps them at the bottom of any sort.
+    _NUMERIC_FILL_ZERO = [
+        'Norm ', 'Virtual Norm', 'Adjusted_Target', 'Stock',
+        'Requirement', 'Vector_Requirement', 'CPT_Requirement',
+        'Penetration', 'NormPenetration', 'NormRequirement',
+        'PriorityScore_Inventory', 'NormInventoryScore',
+        'PriorityScore',
+        'ConsolidatedPriorityScore', 'ConsolidatedPriorityScore_p',
+        'ProxyPenetration', 'ProxyRank',
+        'ASP', 'daily_cure', 'rev_pot', 'price_priority',
+        'MarketWeight', 'TopSKUFlag',
+    ]
+    for col in _NUMERIC_FILL_ZERO:
+        if col in merged_df.columns:
+            merged_df[col] = pd.to_numeric(merged_df[col], errors='coerce').fillna(0)
+
+    # SELECT & ORDER OUTPUT COLUMNS — logical left-to-right narrative
+    output_columns = [
+        # --- Group 1: Identification ---
+        'SKUCode', 'SKU Description', 'size',
+
+        # --- Group 2: Targets ---
+        'Market', 'Norm ', 'Virtual Norm', 'Adjusted_Target',
+
+        # --- Group 3: Demand Signals ---
+        'Stock', 'Requirement', 'Penetration',
+        'NormPenetration', 'NormRequirement',
+
+        # --- Group 4: SKU Attributes ---
+        'Top SKU', 'TopSKUFlag', 'MarketWeight', 'priority',
+
+        # --- Group 5: Inventory Signals ---
+        'PriorityScore_Inventory', 'NormInventoryScore',
+
+        # --- Group 6: Deployment Metrics & Gap Flags ---
+        'MachineCount', 'AvgMouldHealth',
+        'ProxyPenetration', 'ProxyRank',
+        'CriticalGap', 'ExcessProduction', 'MouldAlert', 'IsGhostSKU',
+
+        # --- Group 7: Revenue & Efficiency ---
+        'ASP', 'Cure Time', 'daily_cure', 'rev_pot', 'price_priority',
+
+        # --- Group 8: Scoring & Ranking ---
+        'PriorityScore',
+        'ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore',
+        'ConsolidatedPriorityScore_p', 'Rank_ConsolidatedPriorityScore_p',
+    ]
+
+    # Only include columns that actually exist in this run
+    available_cols = [col for col in output_columns if col in merged_df.columns]
+    return merged_df[available_cols]

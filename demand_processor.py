@@ -5,7 +5,10 @@ import os
 from datetime import datetime
 import config # Import the settings
 
+
+
 def process_single_date(date_str):
+
     date = datetime.strptime(date_str, "%d%m%Y")
     
     # Paths constructed from config
@@ -46,28 +49,56 @@ def process_single_date(date_str):
     bor_v = bor_v[bor_v['Location Code'].str.startswith('1300')].copy()
     bor_v['Market'] = bor_v['Location Code'].str.split('_').str[1].replace({'FG10': 'RE', 'OE10': 'OE', 'ST10': 'ST'})
     bor_v['Market'] = bor_v['Market'].astype(str)  # Ensure string type
-    bor_v['Penetration'] = np.where(bor_v['Virtual Norm'] == 0, 0, (bor_v['Virtual Norm'] - bor_v['Stock']) / bor_v['Virtual Norm'] * 100)
+    
+    # --- STRATEGIC NORM ADJUSTMENT ---
+    # Apply conditional multipliers based on Market type
+    # RE (Replacement) market: 50% adjustment, OE/EXP: 100% (no adjustment)
+    # Use Virtual Norm as the baseline for all calculations
+    bor_v['Adjusted_Target'] = bor_v.apply(
+        lambda row: row['Virtual Norm'] * 0.5 if row['Market'] == 'RE' else row['Virtual Norm'],
+        axis=1
+    )
+    
+    # Calculate Requirement using Adjusted_Target (ensure non-negative)
+    # Requirement = max(0, Adjusted_Target - Stock)
+    bor_v['Requirement'] = np.maximum(bor_v['Adjusted_Target'] - bor_v['Stock'], 0)
+    
+    # Calculate Penetration using Adjusted_Target
+    # Penetration = (Adjusted_Target - Stock) / Adjusted_Target * 100
+    bor_v['Penetration'] = np.where(
+        bor_v['Adjusted_Target'] == 0, 
+        0, 
+        (bor_v['Adjusted_Target'] - bor_v['Stock']) / bor_v['Adjusted_Target'] * 100
+    )
     bor_v = bor_v.merge(bpr_v[['SKUCode', 'Location Code', 'Top SKU']], on=['SKUCode', 'Location Code'], how='left')
 
     bmr_v.columns = bmr_v.iloc[0]; bmr_v = bmr_v.drop(index=0).reset_index(drop=True)
     bmr_v = bmr_v[bmr_v['Plant Code'] == '1300'].rename(columns={'Item Code': 'SKUCode', 'Pending CCR Qty': 'Requirement', 'BPP': 'Penetration'})
     bmr_v['SKUCode'] = bmr_v['SKUCode'].astype(str)  # Ensure string type
     bmr_v['Market'], bmr_v['Top SKU'] = 'EXP', 'T'
+    
+    # For BMR data (EXP market), Adjusted_Target is not applicable as BMR doesn't have Virtual Norm
+    # The Requirement and Penetration are already calculated in BMR
+    bmr_v['Adjusted_Target'] = np.nan  # BMR doesn't have Virtual Norm to calculate from
 
     combined = pd.concat([bmr_v, bor_v], ignore_index=True)
     combined = combined[combined['Requirement'] != 0].copy()
     
+    # Extract rim size from SKUCode (positions 8:10 = 9th and 10th characters)
+    # Convert to numeric and handle invalid values
+    combined['size'] = pd.to_numeric(combined['SKUCode'].str[8:10], errors='coerce').fillna(0).astype('Int64')
+    
     # Apply User Params from config
     combined['MarketWeight'] = combined['Market'].map(config.MARKET_WEIGHTS)
-    combined['MarketPriority'] = combined['Market'].map(config.MARKET_PRIORITY)
     combined['TopSKUFlag'] = combined['Top SKU'].apply(lambda x: 1 if x == 'T' else 0)
     
     combined['NormPenetration'] = combined['Penetration'] / combined['Penetration'].max()
     combined['NormRequirement'] = combined['Requirement'] / combined['Requirement'].max()
 
-    # Generate priority tuple (for sorting compatibility with original)
+    # Generate priority tuple — uses -MarketWeight as lead key (higher weight = higher urgency)
+    # MarketPriority removed: MarketWeight already encodes the same ordering (higher = more important)
     combined['priority'] = combined.apply(
-        lambda row: (row['MarketPriority'], -row['Penetration'], -row['Requirement'], -row['TopSKUFlag']), 
+        lambda row: (-row['MarketWeight'], -row['Penetration'], -row['Requirement'], -row['TopSKUFlag']),
         axis=1
     )
 
@@ -119,14 +150,38 @@ def process_single_date(date_str):
     combined = combined.sort_values(by=['Rank_ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore_p'], ascending=[True, True])
 
     # SELECT ONLY REQUIRED COLUMNS (matching original output)
+    # Columns ordered to tell a clear left-to-right story:
+    # Group 1: Identification (Who)
+    # Group 2: Targets (Goal)
+    # Group 3: Demand Signals (How urgent?)
+    # Group 4: Market & SKU Attributes (Context)
+    # Group 5: Inventory Signals (Stock health)
+    # Group 6: Revenue & Efficiency (Value)
+    # Group 7: Scoring & Ranking (Final verdict)
     output_columns = [
-        'SKUCode', 'SKU Description', 'Market', 'Penetration', 'Requirement', 
-        'Norm ', 'Virtual Norm', 'Stock', 'Top SKU', 'MarketPriority', 'TopSKUFlag', 'priority', 'MarketWeight', 
-        'NormPenetration', 'NormRequirement', 'PriorityScore',
+        # --- Group 1: Identification ---
+        'SKUCode', 'SKU Description', 'size',
+
+        # --- Group 2: Targets ---
+        'Market', 'Norm ', 'Virtual Norm', 'Adjusted_Target',
+
+        # --- Group 3: Demand Signals ---
+        'Stock', 'Requirement', 'Penetration',
+        'NormPenetration', 'NormRequirement',
+
+        # --- Group 4: Market & SKU Attributes ---
+        'Top SKU', 'TopSKUFlag', 'MarketWeight', 'priority',
+
+        # --- Group 5: Inventory Signals ---
         'PriorityScore_Inventory', 'NormInventoryScore',
-        'ConsolidatedPriorityScore', 'ASP', 'Cure Time', 'daily_cure',
-        'rev_pot', 'price_priority', 'ConsolidatedPriorityScore_p',
-        'Rank_ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore_p'
+
+        # --- Group 6: Revenue & Efficiency ---
+        'ASP', 'Cure Time', 'daily_cure', 'rev_pot', 'price_priority',
+
+        # --- Group 7: Scoring & Ranking ---
+        'PriorityScore',
+        'ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore',
+        'ConsolidatedPriorityScore_p', 'Rank_ConsolidatedPriorityScore_p',
     ]
     
     # Only select columns that exist
