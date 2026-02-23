@@ -66,20 +66,23 @@ def compute_history_penetration(today_bpr: pd.DataFrame, date_str: str, n: int) 
     # ------------------------------------------------------------------
     # Step 2: Walk backward through historical BOR files to extend streaks.
     # We go from yesterday (day -1) up to day -(n-1) (since today already = 1).
+    # Missing files (weekends / holidays) are SKIPPED — they do not break the
+    # streak because the stock situation does not change on non-working days.
+    # A streak only ends when a file EXISTS and shows the SKU as non-black.
     # ------------------------------------------------------------------
     for day_offset in range(1, n):  # 1 .. n-1
         if not streak_skus:          # no more skus with active streaks
             break
 
-        past_date   = today - timedelta(days=day_offset)
-        bor_path    = (
+        past_date = today - timedelta(days=day_offset)
+        bor_path  = (
             f'{config.BASE_DATA_PATH}/Vectordata/BOR/'
             f'BORColorBandwiseReport__{past_date.strftime("%d-%m-%Y")}.csv'
         )
 
         if not os.path.exists(bor_path):
-            # Missing file → streak stops for all remaining SKUs on this day
-            break
+            # No file for this date (weekend / holiday) — skip, keep streaks alive
+            continue
 
         try:
             past_bor = pd.read_csv(bor_path)
@@ -113,8 +116,8 @@ def compute_history_penetration(today_bpr: pd.DataFrame, date_str: str, n: int) 
             streak_skus = still_streaking
 
         except Exception:
-            # Any parse error → be conservative, stop all streaks
-            break
+            # Parse error on this file — skip this day, keep streaks alive
+            continue
 
     return pd.Series(scores, name='HistoryPenetrationScore')
 
