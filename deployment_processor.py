@@ -263,6 +263,7 @@ def process_deployment_analysis(demand_df, date_str):
         'Requirement', 'Vector_Requirement', 'CPT_Requirement',
         'Penetration', 'NormPenetration', 'NormRequirement',
         'PriorityScore_Inventory', 'NormInventoryScore',
+        'HistoryPenetrationScore', 'NormHistoryPenetrationScore',
         'PriorityScore',
         'ConsolidatedPriorityScore',
         'ProxyPenetration', 'ProxyRank',
@@ -290,6 +291,9 @@ def process_deployment_analysis(demand_df, date_str):
 
         # --- Group 5: Inventory Signals ---
         'PriorityScore_Inventory', 'NormInventoryScore',
+
+        # --- Group 5b: History Penetration ---
+        'HistoryPenetrationScore', 'NormHistoryPenetrationScore',
 
         # --- Group 6: Deployment Metrics & Gap Flags ---
         'MachineCount', 'AvgMouldHealth',

@@ -19,8 +19,7 @@ MANUAL_INPUT_FILE = "./data/manual_frontend_demand.xlsx"
 # so they always sit 10× above the theoretical maximum automated score.
 BOOST_BASE              = 10.0  # Floor score for any manual entry
 BOOST_MULTIPLIER        = 1.0   # Extra score for entries flagged as "Highest Priority"
-OVERSTOCK_PENALTY_FACTOR = 0.0  # Multiplier applied to StrategicPriorityScore for Penetration > 100%
-                                 # 0.0 = scores collapse to zero (always last); raise to e.g. 0.01 to rank ordinally
+
 
 
 # ---------------------------------------------------------------------------
@@ -193,50 +192,6 @@ def _build_manual_rows(
     return manual_rows
 
 
-# ---------------------------------------------------------------------------
-# OVERSTOCK PENALTY
-# ---------------------------------------------------------------------------
-
-def _apply_overstock_penalty(hybrid_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Partition-sort: rows with Penetration > 100% (overstock) are pushed to the
-    bottom of the report regardless of their original priority score.
-
-    Rules:
-    - Manual entries are IMMUNE — the manager explicitly chose these SKUs.
-    - Automated overstock rows have their StrategicPriorityScore multiplied by
-      OVERSTOCK_PENALTY_FACTOR (0.0 by default → score collapses to zero).
-    - Normal partition: sorted by StrategicPriorityScore descending (pre-existing order).
-    - Overstock partition: sorted by Penetration ascending (least-overstocked first).
-    """
-    pen_col = "Penetration"
-
-    if pen_col not in hybrid_df.columns:
-        # No penetration data available — skip penalty, return unchanged
-        return hybrid_df
-
-    pen_numeric = pd.to_numeric(hybrid_df[pen_col], errors="coerce").fillna(0)
-    is_overstock = (pen_numeric > 100) & (hybrid_df["Source"] != "Manual")
-
-    # Apply score penalty to overstock rows
-    hybrid_df.loc[is_overstock, "StrategicPriorityScore"] = (
-        hybrid_df.loc[is_overstock, "StrategicPriorityScore"] * OVERSTOCK_PENALTY_FACTOR
-    )
-
-    # Split into two partitions
-    normal_df    = hybrid_df[~is_overstock].copy()
-    overstock_df = hybrid_df[is_overstock].copy()
-
-    # Sort each partition independently
-    normal_df    = normal_df.sort_values("StrategicPriorityScore", ascending=False)
-    overstock_df = overstock_df.sort_values(pen_col, ascending=True)  # least overstocked first
-
-    n_overstock = len(overstock_df)
-    if n_overstock > 0:
-        print(f"[STAGE 3] Overstock penalty applied: {n_overstock} row(s) with Penetration > 100% moved to bottom")
-
-    return pd.concat([normal_df, overstock_df], ignore_index=True)
-
 
 # ---------------------------------------------------------------------------
 # PUBLIC API
@@ -332,6 +287,7 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
         'Requirement', 'Vector_Requirement', 'CPT_Requirement',
         'Penetration', 'NormPenetration', 'NormRequirement',
         'PriorityScore_Inventory', 'NormInventoryScore',
+        'HistoryPenetrationScore', 'NormHistoryPenetrationScore',
         'PriorityScore',
         'ConsolidatedPriorityScore',
         'ProxyPenetration', 'ProxyRank',
@@ -358,11 +314,13 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
         hybrid_df.get("ConsolidatedPriorityScore", pd.Series(0.0, index=hybrid_df.index))
     )
 
-    # ---- Step 8: Overstock penalty — push Penetration > 100% rows to bottom ----
-    hybrid_df = _apply_overstock_penalty(hybrid_df)
-
-    # ---- Step 9: Final Rank — continuous sequence based on definitive sort order ----
-    hybrid_df = hybrid_df.reset_index(drop=True)
+    # ---- Step 8: Final Rank — sort by StrategicPriorityScore then stamp rank ----
+    # Must sort HERE so that automated rows with high scores are not buried by
+    # whatever order the Stage-2 ProxyRank happened to leave them in.
+    # Manual entries (score 10–11) always float above automated entries (score ≤ 1).
+    hybrid_df = hybrid_df.sort_values(
+        "StrategicPriorityScore", ascending=False
+    ).reset_index(drop=True)
     hybrid_df["Final Rank"] = hybrid_df.index + 1
 
     # Summary
@@ -397,6 +355,9 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
 
         # --- Group 7: Inventory Signals ---
         'PriorityScore_Inventory', 'NormInventoryScore',
+
+        # --- Group 7b: History Penetration ---
+        'HistoryPenetrationScore', 'NormHistoryPenetrationScore',
 
         # --- Group 8: Deployment Metrics & Gap Flags ---
         'MachineCount', 'AvgMouldHealth',

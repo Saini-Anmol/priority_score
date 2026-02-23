@@ -125,17 +125,35 @@ INVENTORY_SCORE_FACTORS = {
 }
 
 # ---------------------------------------------------------------------------
-# 8. CONSOLIDATED SCORE WEIGHTS  (Demand + Inventory + Price)
-# Set price_priority = 0 to get pure Demand+Inventory scoring (former Tier 1)
+# 8. MARKET NORM MULTIPLIERS  (fraction of Virtual Norm used as Adjusted_Target)
+# 1.0 = 100% of Virtual Norm; 0.5 = 50%. EXP uses BMR data (no multiplier needed).
 # ---------------------------------------------------------------------------
-CONSOLIDATED_WEIGHTS = {
-    "demand_priority":    float(_get("CONSOLIDATED_demand_priority")),    # Market/Penetration/Requirement
-    "inventory_priority": float(_get("CONSOLIDATED_inventory_priority")), # Red/Black stockouts
-    "price_priority":     float(_get("CONSOLIDATED_price_priority")),     # Revenue/Daily capacity
+NORM_MULTIPLIERS = {
+    'RE': float(_get("RE_NORM_MULTIPLIER")),
+    'OE': float(_get("OE_NORM_MULTIPLIER")),
+    'ST': float(_get("ST_NORM_MULTIPLIER")),
 }
 
 # ---------------------------------------------------------------------------
-# 9. PRODUCTION CONSTANTS
+# 9. CONSOLIDATED SCORE WEIGHTS  (Demand + Inventory + Price + History Penetration)
+# Set price_priority = 0 for pure Demand+Inventory+History scoring.
+# Set history_penetration = 0 to disable streak-based history scoring.
+# ---------------------------------------------------------------------------
+CONSOLIDATED_WEIGHTS = {
+    "demand_priority":       float(_get("CONSOLIDATED_demand_priority")),       # Market/Penetration/Requirement
+    "inventory_priority":    float(_get("CONSOLIDATED_inventory_priority")),    # Red/Black stockouts
+    "price_priority":        float(_get("CONSOLIDATED_price_priority")),        # Revenue/Daily capacity
+    "history_penetration":   float(_get("CONSOLIDATED_history_penetration")),   # Consecutive black-day streak
+}
+
+# ---------------------------------------------------------------------------
+# 10. HISTORY PENETRATION LOOKBACK WINDOW
+# Number of past days to check for consecutive black streak scoring.
+# ---------------------------------------------------------------------------
+HISTORY_PENETRATION_N = int(_get("HISTORY_PENETRATION_N"))
+
+# ---------------------------------------------------------------------------
+# 11. PRODUCTION CONSTANTS
 # ---------------------------------------------------------------------------
 EFFICIENCY_FACTOR  = float(_get("EFFICIENCY_FACTOR"))
 DEFAULT_ASP        = int(_get("DEFAULT_ASP"))

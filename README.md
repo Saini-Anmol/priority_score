@@ -127,12 +127,13 @@ Stage 1 reads four daily reports and two static files per date to produce a rank
 ### Processing Flow
 
 ```
-BOR / BMR  →  Strategic Norm Adjustment  →  PriorityScore (demand)
+BOR / BMR  →  Strategic Norm Adjustment (config multipliers)  →  PriorityScore (demand)
 BPR        →  PriorityScore_Inventory
+BOR hist.  →  HistoryPenetrationScore (consecutive black streak, last N days)
 DISPATCH   →  ASP
 Curing     →  daily_cure  →  rev_pot  →  price_priority
 
-PriorityScore + NormInventoryScore + price_priority  →  ConsolidatedPriorityScore  (single configurable score)
+PriorityScore + NormInventoryScore + price_priority + NormHistoryPenetrationScore  →  ConsolidatedPriorityScore
 ```
 
 ### Output
@@ -209,14 +210,17 @@ This section documents the exact formulas used for every important derived colum
 
 #### `Adjusted_Target`
 
-Strategic norm adjustment based on market type. RE (Replacement) market uses 50% of Virtual Norm to reflect the strategic de-prioritization of replacement buffers.
+Strategic norm adjustment based on market type. Each market's multiplier is configurable via `config_input.xlsx`. Default is **100% of Virtual Norm** for all markets.
 
 ```
-Adjusted_Target = Virtual Norm × 0.5    (if Market == 'RE')
-Adjusted_Target = Virtual Norm × 1.0    (if Market == 'OE', 'ST', or 'EXP')
+Adjusted_Target = Virtual Norm × RE_NORM_MULTIPLIER    (if Market == 'RE')   [default: 1.0]
+Adjusted_Target = Virtual Norm × OE_NORM_MULTIPLIER    (if Market == 'OE')   [default: 1.0]
+Adjusted_Target = Virtual Norm × ST_NORM_MULTIPLIER    (if Market == 'ST')   [default: 1.0]
 ```
 
 > **Note:** For EXP (Export) data from BMR, `Adjusted_Target` is `NaN` because BMR does not provide a Virtual Norm. BMR's Requirement and Penetration are taken as-is.
+>
+> To apply a conservative RE target (former behaviour), set `RE_NORM_MULTIPLIER = 0.5` in `config_input.xlsx`.
 
 ---
 
@@ -312,15 +316,44 @@ NormInventoryScore = PriorityScore_Inventory / max(PriorityScore_Inventory)  [ac
 
 ---
 
+#### `HistoryPenetrationScore`
+
+Counts how many **consecutive days from today backward** a SKU was in **Black** status, reading past BOR files up to `HISTORY_PENETRATION_N` days.
+
+- **Red today** → score = `0` (regardless of history)
+- **Black today** → score = consecutive black days ending today (minimum 1, maximum N)
+
+```
+HistoryPenetrationScore = 0                        (if SKU is Red today)
+HistoryPenetrationScore = consecutive black days   (if SKU is Black today, capped at N)
+
+NormHistoryPenetrationScore = HistoryPenetrationScore / N
+```
+
+**Example (N = 10):**
+
+| Status (10 days, newest→oldest) | Score |
+| ------------------------------- | ----- |
+| Black for all 10 days           | 10    |
+| Black for 5 days, Red on day 6  | 5     |
+| Black only today                | 1     |
+| Red today                       | 0     |
+
+---
+
 #### `ConsolidatedPriorityScore`
 
-Single unified score combining demand urgency, inventory criticality, and revenue potential. Weights are fully configurable. Setting `CONSOLIDATED_price_priority = 0` gives pure Demand + Inventory scoring.
+Single unified score combining demand urgency, inventory criticality, revenue potential, and historical black-day streak. All four weights are fully configurable.
 
 ```
-ConsolidatedPriorityScore = (PriorityScore      × CONSOLIDATED_demand_priority)    [default: 0.40]
-                           + (NormInventoryScore  × CONSOLIDATED_inventory_priority) [default: 0.30]
-                           + (price_priority      × CONSOLIDATED_price_priority)     [default: 0.30]
+ConsolidatedPriorityScore = (PriorityScore               × CONSOLIDATED_demand_priority)      [default: 0.35]
+                           + (NormInventoryScore          × CONSOLIDATED_inventory_priority)   [default: 0.25]
+                           + (price_priority              × CONSOLIDATED_price_priority)       [default: 0.25]
+                           + (NormHistoryPenetrationScore × CONSOLIDATED_history_penetration)  [default: 0.15]
 ```
+
+> Setting `CONSOLIDATED_history_penetration = 0` disables streak scoring entirely.  
+> Setting `CONSOLIDATED_price_priority = 0` gives pure Demand + Inventory + History scoring.
 
 ---
 
@@ -499,12 +532,12 @@ Final Rank = row index + 1   (after all sorting is complete)
 
 ### Group 3 — Targets
 
-| Column            | Description                                                  |
-| ----------------- | ------------------------------------------------------------ |
-| `Market`          | `OE`, `ST`, `EXP`, or `RE`                                   |
-| `Norm `           | Original production norm                                     |
-| `Virtual Norm`    | Adjusted norm used as baseline                               |
-| `Adjusted_Target` | Virtual Norm × market multiplier (0.5 for RE, 1.0 otherwise) |
+| Column            | Description                                                              |
+| ----------------- | ------------------------------------------------------------------------ |
+| `Market`          | `OE`, `ST`, `EXP`, or `RE`                                               |
+| `Norm `           | Original production norm                                                 |
+| `Virtual Norm`    | Adjusted norm used as baseline                                           |
+| `Adjusted_Target` | Virtual Norm × market multiplier (configurable; default 1.0 all markets) |
 
 ### Group 4 — Demand Signals
 
@@ -534,6 +567,13 @@ Final Rank = row index + 1   (after all sorting is complete)
 | `PriorityScore_Inventory` | Weighted sum of Red/Black stockouts across all locations |
 | `NormInventoryScore`      | `PriorityScore_Inventory / max(PriorityScore_Inventory)` |
 
+### Group 6b — History Penetration
+
+| Column                        | Description                                              |
+| ----------------------------- | -------------------------------------------------------- |
+| `HistoryPenetrationScore`     | Consecutive black days from today backward (0 – N)       |
+| `NormHistoryPenetrationScore` | `HistoryPenetrationScore / N` — normalized for score use |
+
 ### Group 7 — Deployment Metrics & Flags (Stage 2+)
 
 | Column             | Description                                                       |
@@ -559,11 +599,11 @@ Final Rank = row index + 1   (after all sorting is complete)
 
 ### Group 9 — Scoring & Ranking
 
-| Column                           | Description                                                                                                    |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `PriorityScore`                  | Demand-only score: weighted sum of market, penetration, requirement, top SKU                                   |
-| `ConsolidatedPriorityScore`      | Unified score: `PriorityScore × w1 + NormInventoryScore × w2 + price_priority × w3` (all weights configurable) |
-| `Rank_ConsolidatedPriorityScore` | Final rank based on `ConsolidatedPriorityScore` (lower = higher priority)                                      |
+| Column                           | Description                                                                                                                               |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `PriorityScore`                  | Demand-only score: weighted sum of market, penetration, requirement, top SKU                                                              |
+| `ConsolidatedPriorityScore`      | Unified score: `PriorityScore×w1 + NormInventoryScore×w2 + price_priority×w3 + NormHistoryPenetrationScore×w4` (all weights configurable) |
+| `Rank_ConsolidatedPriorityScore` | Final rank based on `ConsolidatedPriorityScore` (lower = higher priority)                                                                 |
 
 ---
 
@@ -573,29 +613,34 @@ All parameters are stored in `config_input.xlsx`. Run `python create_config_exce
 
 ### Stage 1 Config (`Stage1_Config` sheet)
 
-| Parameter                         | Default | Description                                                                 |
-| --------------------------------- | ------- | --------------------------------------------------------------------------- |
-| `MARKET_WEIGHTS_OE`               | 4       | OE market weight                                                            |
-| `MARKET_WEIGHTS_ST`               | 3       | ST market weight                                                            |
-| `MARKET_WEIGHTS_EXP`              | 2       | EXP market weight                                                           |
-| `MARKET_WEIGHTS_RE`               | 1       | RE market weight                                                            |
-| `LOCATION_WEIGHTS_JIT`            | 5       | JIT warehouse weight                                                        |
-| `LOCATION_WEIGHTS_Depot`          | 4       | Depot weight                                                                |
-| `LOCATION_WEIGHTS_Depot_Mobility` | 3       | Depot Mobility weight                                                       |
-| `LOCATION_WEIGHTS_Feeder`         | 2       | Feeder weight                                                               |
-| `LOCATION_WEIGHTS_PWH`            | 1       | PWH weight                                                                  |
-| `SCORING_market_weightage`        | 0.25    | Market % in PriorityScore                                                   |
-| `SCORING_penetration_weightage`   | 0.35    | Penetration % in PriorityScore                                              |
-| `SCORING_requirement_weightage`   | 0.30    | Requirement % in PriorityScore                                              |
-| `SCORING_top_sku_weightage`       | 0.10    | Top SKU % in PriorityScore                                                  |
-| `INVENTORY_BLACK_FACTOR`          | 1.0     | Score multiplier for Black stockout (critical)                              |
-| `INVENTORY_RED_FACTOR`            | 0.5     | Score multiplier for Red stockout (warning)                                 |
-| `CONSOLIDATED_demand_priority`    | 0.40    | Demand % in ConsolidatedPriorityScore                                       |
-| `CONSOLIDATED_inventory_priority` | 0.30    | Inventory % in ConsolidatedPriorityScore                                    |
-| `CONSOLIDATED_price_priority`     | 0.30    | Revenue % in ConsolidatedPriorityScore (set to 0 for Demand+Inventory only) |
-| `EFFICIENCY_FACTOR`               | 0.90    | Machine efficiency for daily_cure                                           |
-| `DEFAULT_ASP`                     | 3000    | Fallback ASP when no dispatch history                                       |
-| `DEFAULT_CURE_TIME`               | 15      | Fallback cure time (minutes)                                                |
+| Parameter                          | Default | Description                                                                         |
+| ---------------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| `MARKET_WEIGHTS_OE`                | 4       | OE market weight                                                                    |
+| `MARKET_WEIGHTS_ST`                | 3       | ST market weight                                                                    |
+| `MARKET_WEIGHTS_EXP`               | 2       | EXP market weight                                                                   |
+| `MARKET_WEIGHTS_RE`                | 1       | RE market weight                                                                    |
+| `LOCATION_WEIGHTS_JIT`             | 5       | JIT warehouse weight                                                                |
+| `LOCATION_WEIGHTS_Depot`           | 4       | Depot weight                                                                        |
+| `LOCATION_WEIGHTS_Depot_Mobility`  | 3       | Depot Mobility weight                                                               |
+| `LOCATION_WEIGHTS_Feeder`          | 2       | Feeder weight                                                                       |
+| `LOCATION_WEIGHTS_PWH`             | 1       | PWH weight                                                                          |
+| `RE_NORM_MULTIPLIER`               | 1.0     | Fraction of Virtual Norm used as Adjusted_Target for RE market (1.0 = 100%)         |
+| `OE_NORM_MULTIPLIER`               | 1.0     | Fraction of Virtual Norm used as Adjusted_Target for OE market                      |
+| `ST_NORM_MULTIPLIER`               | 1.0     | Fraction of Virtual Norm used as Adjusted_Target for ST market                      |
+| `SCORING_market_weightage`         | 0.25    | Market % in PriorityScore                                                           |
+| `SCORING_penetration_weightage`    | 0.35    | Penetration % in PriorityScore                                                      |
+| `SCORING_requirement_weightage`    | 0.30    | Requirement % in PriorityScore                                                      |
+| `SCORING_top_sku_weightage`        | 0.10    | Top SKU % in PriorityScore                                                          |
+| `INVENTORY_BLACK_FACTOR`           | 1.0     | Score multiplier for Black stockout (critical)                                      |
+| `INVENTORY_RED_FACTOR`             | 0.5     | Score multiplier for Red stockout (warning)                                         |
+| `CONSOLIDATED_demand_priority`     | 0.35    | Demand % in ConsolidatedPriorityScore                                               |
+| `CONSOLIDATED_inventory_priority`  | 0.25    | Inventory % in ConsolidatedPriorityScore                                            |
+| `CONSOLIDATED_price_priority`      | 0.25    | Revenue % in ConsolidatedPriorityScore (set to 0 for Demand+Inventory+History only) |
+| `CONSOLIDATED_history_penetration` | 0.15    | History streak % in ConsolidatedPriorityScore (set to 0 to disable)                 |
+| `HISTORY_PENETRATION_N`            | 10      | Lookback window in days for consecutive black streak scoring                        |
+| `EFFICIENCY_FACTOR`                | 0.90    | Machine efficiency for daily_cure                                                   |
+| `DEFAULT_ASP`                      | 3000    | Fallback ASP when no dispatch history                                               |
+| `DEFAULT_CURE_TIME`                | 15      | Fallback cure time (minutes)                                                        |
 
 ### Stage 2 Config (`Stage2_Config` sheet)
 

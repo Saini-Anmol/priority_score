@@ -34,6 +34,11 @@ stage1_rows = [
     ("LOCATION_WEIGHTS_Depot_Mobility",    3,    ""),
     ("LOCATION_WEIGHTS_Feeder",            2,    ""),
     ("LOCATION_WEIGHTS_PWH",               1,    ""),
+    # --- Market Norm Multipliers (fraction of Virtual Norm used as Adjusted_Target) ---
+    # 1.0 = 100% of Virtual Norm; 0.5 = 50% of Virtual Norm, etc.
+    ("RE_NORM_MULTIPLIER",                 1.0,  ""),
+    ("OE_NORM_MULTIPLIER",                 1.0,  ""),
+    ("ST_NORM_MULTIPLIER",                 1.0,  ""),
     # --- Scoring Params ---
     ("SCORING_market_weightage",           0.25, ""),
     ("SCORING_penetration_weightage",      0.35, ""),
@@ -43,11 +48,17 @@ stage1_rows = [
     # Black stockout contributes more than Red; adjust freely (e.g. 1.0 / 0.5)
     ("INVENTORY_BLACK_FACTOR",             1.0,  ""),
     ("INVENTORY_RED_FACTOR",               0.5,  ""),
-    # --- Consolidated Score Weights (Demand + Inventory + Price) ---
-    # Setting CONSOLIDATED_price_priority = 0 gives pure Demand+Inventory scoring
-    ("CONSOLIDATED_demand_priority",       0.4,  ""),
-    ("CONSOLIDATED_inventory_priority",    0.3,  ""),
-    ("CONSOLIDATED_price_priority",        0.3,  ""),
+    # --- Consolidated Score Weights (Demand + Inventory + Price + History Penetration) ---
+    # Weights sum to 1.0. Set history_penetration = 0 to disable it.
+    # Setting price_priority = 0 gives pure Demand+Inventory+History scoring.
+    ("CONSOLIDATED_demand_priority",       0.35, ""),
+    ("CONSOLIDATED_inventory_priority",    0.25, ""),
+    ("CONSOLIDATED_price_priority",        0.25, ""),
+    ("CONSOLIDATED_history_penetration",   0.15, ""),
+    # --- History Penetration Lookback Window ---
+    # N = number of past days to look back for consecutive black streak scoring
+    # Score = consecutive black days from today (max N); Red today = 0
+    ("HISTORY_PENETRATION_N",              10,   ""),
     # --- Production Constants ---
     ("EFFICIENCY_FACTOR",                  0.9,  ""),
     ("DEFAULT_ASP",                        3000, ""),

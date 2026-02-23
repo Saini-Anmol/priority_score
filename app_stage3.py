@@ -83,7 +83,7 @@ def run_hybrid_analysis():
         print("-" * 80)
 
         # Final Rank and column order are set by the processor — just sort and write.
-        # The processor guarantees: Final Rank col-0, manual top, overstock bottom.
+        # The processor guarantees: Final Rank col-0, manual entries at top.
         if "Final Rank" in hybrid_df.columns:
             hybrid_df = hybrid_df.sort_values("Final Rank", ascending=True).reset_index(drop=True)
 
@@ -103,13 +103,7 @@ def run_hybrid_analysis():
         manual_rows  = hybrid_df[hybrid_df["Source"] == "Manual"]
         auto_rows    = hybrid_df[hybrid_df["Source"] == "Automated"]
 
-        # Overstock rows for summary (Automated only, Penetration > 100)
-        if "Penetration" in hybrid_df.columns:
-            pen_numeric    = pd.to_numeric(hybrid_df["Penetration"], errors="coerce").fillna(0)
-            overstock_rows = hybrid_df[(pen_numeric > 100) & (hybrid_df["Source"] != "Manual")]
-            n_overstock    = len(overstock_rows)
-        else:
-            n_overstock = 0
+
 
         print(f"Manual Override:")
         print(f"  • Total manual entries injected : {len(manual_rows)}")
@@ -135,7 +129,7 @@ def run_hybrid_analysis():
             print(f"  • 🔴 Critical Gaps (high-priority, not running)       : {critical_gaps}")
             print(f"  • ⚠️  Excess Production (low-priority, many machines)  : {excess_production}")
             print(f"  • 🔧 Mould Alerts (nearing end of life)               : {mould_alerts}")
-            print(f"  • 📦 Overstock items (Penetration > 100%, sent to end): {n_overstock}")
+
 
         print("\n" + "=" * 80)
         print("Hybrid Analysis Complete!")

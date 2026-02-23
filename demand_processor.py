@@ -2,10 +2,126 @@
 import pandas as pd
 import numpy as np
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import config # Import the settings
 
 
+
+# ---------------------------------------------------------------------------
+# HISTORY PENETRATION HELPER
+# ---------------------------------------------------------------------------
+
+def compute_history_penetration(today_bpr: pd.DataFrame, date_str: str, n: int) -> pd.Series:
+    """
+    Compute HistoryPenetrationScore for each SKUCode.
+
+    Scoring rules (based on consecutive black days counting backward from today):
+      - If a SKU is RED today (in today's BPR) → score = 0
+      - If a SKU is BLACK today → score = number of consecutive black days
+        from today backward (inclusive), capped at N.
+        e.g. N=10: if black for last 10 days → score=10; black only today → score=1
+
+    For historical days (yesterday, day-2, …) we re-read the BOR file for each date.
+    A BOR color is determined by the 'Color' column.  If the file is missing for a
+    past date, that day is treated as non-black and the streak stops.
+
+    Args:
+        today_bpr  : DataFrame of the BPR file for today (must have SKUCode, On hand Inv. Color)
+        date_str   : Today's date in DDMMYYYY format
+        n          : Lookback window (config.HISTORY_PENETRATION_N)
+
+    Returns:
+        pd.Series indexed by SKUCode with integer scores.
+    """
+    today = datetime.strptime(date_str, "%d%m%Y")
+
+    # ------------------------------------------------------------------
+    # Step 1: Determine today's color per SKU from BPR.
+    # Use the most-common color per SKUCode (majority rule across locations).
+    # ------------------------------------------------------------------
+    bpr = today_bpr.copy()
+    bpr['SKUCode'] = bpr['SKUCode'].astype(str)
+
+    def _dominant_color(group):
+        """Return 'Black' if majority of locations are Black, else the most frequent color."""
+        counts = group['On hand Inv. Color'].value_counts()
+        return counts.index[0] if len(counts) else 'Unknown'
+
+    today_color = (
+        bpr.groupby('SKUCode')
+        .apply(_dominant_color)
+        .rename('TodayColor')
+    )
+
+    all_skus = today_color.index.tolist()
+
+    # Initialise scores dict — red today → 0, else start at 1 (today is black)
+    scores = {}
+    for sku in all_skus:
+        scores[sku] = 0 if today_color.get(sku, 'Unknown') != 'Black' else 1
+
+    # SKUs that are black today — eligible for streak extension
+    streak_skus = [s for s in all_skus if scores[s] == 1]
+
+    # ------------------------------------------------------------------
+    # Step 2: Walk backward through historical BOR files to extend streaks.
+    # We go from yesterday (day -1) up to day -(n-1) (since today already = 1).
+    # ------------------------------------------------------------------
+    for day_offset in range(1, n):  # 1 .. n-1
+        if not streak_skus:          # no more skus with active streaks
+            break
+
+        past_date   = today - timedelta(days=day_offset)
+        bor_path    = (
+            f'{config.BASE_DATA_PATH}/Vectordata/BOR/'
+            f'BORColorBandwiseReport__{past_date.strftime("%d-%m-%Y")}.csv'
+        )
+
+        if not os.path.exists(bor_path):
+            # Missing file → streak stops for all remaining SKUs on this day
+            break
+
+        try:
+            past_bor = pd.read_csv(bor_path)
+            past_bor['SKUCode'] = past_bor['SKUCode'].astype(str)
+
+            # Filter to plant 1300 (same as main logic)
+            if 'Location Code' in past_bor.columns:
+                past_bor = past_bor[past_bor['Location Code'].str.startswith('1300')]
+
+            # Determine color per SKU on this past day using 'Color' column in BOR
+            if 'Color' in past_bor.columns:
+                color_col = 'Color'
+            elif 'On hand Inv. Color' in past_bor.columns:
+                color_col = 'On hand Inv. Color'
+            else:
+                # Cannot determine color → stop all streaks
+                break
+
+            past_color = past_bor.groupby('SKUCode')[color_col].agg(
+                lambda x: x.value_counts().index[0] if len(x) > 0 else 'Unknown'
+            )
+
+            # Extend streak only for SKUs that were also Black on this past day
+            still_streaking = []
+            for sku in streak_skus:
+                if past_color.get(sku, 'Unknown') == 'Black':
+                    scores[sku] += 1
+                    still_streaking.append(sku)
+                # else: streak ends — score stays as-is, SKU removed from list
+
+            streak_skus = still_streaking
+
+        except Exception:
+            # Any parse error → be conservative, stop all streaks
+            break
+
+    return pd.Series(scores, name='HistoryPenetrationScore')
+
+
+# ---------------------------------------------------------------------------
+# MAIN STAGE 1 PROCESSOR
+# ---------------------------------------------------------------------------
 
 def process_single_date(date_str):
 
@@ -52,17 +168,16 @@ def process_single_date(date_str):
     bor_v['Market'] = bor_v['Location Code'].str.split('_').str[1].replace({'FG10': 'RE', 'OE10': 'OE', 'ST10': 'ST'})
     bor_v['Market'] = bor_v['Market'].astype(str)  # Ensure string type
     
-    # --- STRATEGIC NORM ADJUSTMENT ---
-    # Adjusted_Target drives Requirement:
-    #   RE market: 50% of Virtual Norm (conservative target)
-    #   OE / EXP:  100% of Virtual Norm
+    # --- STRATEGIC NORM ADJUSTMENT (config-driven multipliers) ---
+    # Adjusted_Target = Virtual Norm × Market Multiplier
+    # Defaults: RE=1.0, OE=1.0, ST=1.0 (all 100% of Virtual Norm)
+    # Users can override in config_input.xlsx (e.g. RE=0.5 for conservative RE target)
     bor_v['Adjusted_Target'] = bor_v.apply(
-        lambda row: row['Virtual Norm'] * 0.5 if row['Market'] == 'RE' else row['Virtual Norm'],
+        lambda row: row['Virtual Norm'] * config.NORM_MULTIPLIERS.get(row['Market'], 1.0),
         axis=1
     )
     
     # Requirement = max(0, Adjusted_Target - Stock)
-    # RE gets 50% virtual norm target; OE/EXP get full virtual norm target
     bor_v['Requirement'] = np.maximum(bor_v['Adjusted_Target'] - bor_v['Stock'], 0)
     
     # Penetration ALWAYS uses 100% Virtual Norm as the baseline (config requirement).
@@ -132,12 +247,22 @@ def process_single_date(date_str):
     combined['rev_pot'] = combined['ASP'] * combined['daily_cure']
     combined['price_priority'] = combined['rev_pot'] / combined['rev_pot'].max()
 
-    # CONSOLIDATED SCORE (Demand + Inventory + Price)
-    # Weights are fully configurable. Set price_priority = 0 for pure Demand+Inventory scoring.
+    # --- HISTORY PENETRATION SCORING ---
+    n_days = config.HISTORY_PENETRATION_N
+    history_scores = compute_history_penetration(bpr_v, date_str, n_days)
+    combined['HistoryPenetrationScore'] = combined['SKUCode'].map(history_scores).fillna(0).astype(int)
+    # Normalize to [0, 1] by dividing by N for use in consolidated score
+    combined['NormHistoryPenetrationScore'] = combined['HistoryPenetrationScore'] / n_days
+
+    # CONSOLIDATED SCORE (Demand + Inventory + Price + History Penetration)
+    # Weights are fully configurable via config_input.xlsx.
+    # Set price_priority = 0 for pure Demand+Inventory+History scoring.
+    # Set history_penetration = 0 to disable streak-based scoring.
     combined['ConsolidatedPriorityScore'] = (
-        combined['PriorityScore'] * config.CONSOLIDATED_WEIGHTS["demand_priority"] +
-        combined['NormInventoryScore'] * config.CONSOLIDATED_WEIGHTS["inventory_priority"] +
-        combined['price_priority'] * config.CONSOLIDATED_WEIGHTS["price_priority"]
+        combined['PriorityScore']            * config.CONSOLIDATED_WEIGHTS["demand_priority"] +
+        combined['NormInventoryScore']       * config.CONSOLIDATED_WEIGHTS["inventory_priority"] +
+        combined['price_priority']           * config.CONSOLIDATED_WEIGHTS["price_priority"] +
+        combined['NormHistoryPenetrationScore'] * config.CONSOLIDATED_WEIGHTS["history_penetration"]
     )
 
     # SINGLE RANKING — one consolidated score, one rank
@@ -154,7 +279,8 @@ def process_single_date(date_str):
     # Group 4: Market & SKU Attributes (Context)
     # Group 5: Inventory Signals (Stock health)
     # Group 6: Revenue & Efficiency (Value)
-    # Group 7: Scoring & Ranking (Final verdict)
+    # Group 7: History Penetration (Streak)
+    # Group 8: Scoring & Ranking (Final verdict)
     output_columns = [
         # --- Group 1: Identification ---
         'SKUCode', 'SKU Description', 'size',
@@ -175,7 +301,10 @@ def process_single_date(date_str):
         # --- Group 6: Revenue & Efficiency ---
         'ASP', 'Cure Time', 'daily_cure', 'rev_pot', 'price_priority',
 
-        # --- Group 7: Scoring & Ranking ---
+        # --- Group 7: History Penetration ---
+        'HistoryPenetrationScore', 'NormHistoryPenetrationScore',
+
+        # --- Group 8: Scoring & Ranking ---
         'PriorityScore',
         'ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore',
     ]
