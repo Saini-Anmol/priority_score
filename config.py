@@ -82,6 +82,7 @@ MARKET_WEIGHTS = {
     'OE':  int(_get("MARKET_WEIGHTS_OE")),
     'ST':  int(_get("MARKET_WEIGHTS_ST")),
     'EXP': int(_get("MARKET_WEIGHTS_EXP")),
+    'OTR': int(_get("MARKET_WEIGHTS_OTR")),   # Off-the-road tyres
     'RE':  int(_get("MARKET_WEIGHTS_RE")),
 }
 
@@ -92,6 +93,7 @@ MARKET_PRIORITY = {
     'OE':  int(_get("MARKET_PRIORITY_OE")),
     'ST':  int(_get("MARKET_PRIORITY_ST")),
     'EXP': int(_get("MARKET_PRIORITY_EXP")),
+    'OTR': int(_get("MARKET_PRIORITY_OTR")),   # Off-the-road tyres
     'RE':  int(_get("MARKET_PRIORITY_RE")),
 }
 
@@ -129,9 +131,26 @@ INVENTORY_SCORE_FACTORS = {
 # 1.0 = 100% of Virtual Norm; 0.5 = 50%. EXP uses BMR data (no multiplier needed).
 # ---------------------------------------------------------------------------
 NORM_MULTIPLIERS = {
-    'RE': float(_get("RE_NORM_MULTIPLIER")),
-    'OE': float(_get("OE_NORM_MULTIPLIER")),
-    'ST': float(_get("ST_NORM_MULTIPLIER")),
+    'RE':  float(_get("RE_NORM_MULTIPLIER")),
+    'OE':  float(_get("OE_NORM_MULTIPLIER")),
+    'ST':  float(_get("ST_NORM_MULTIPLIER")),
+    'OTR': float(_get("OTR_NORM_MULTIPLIER")),   # Off-the-road tyres
+}
+
+# ---------------------------------------------------------------------------
+# 9b. YIELD FACTORS  (Quality adjustment — Stage 3 Updated_Requirement)
+# OE and EXP: Updated_Requirement = ceil(Requirement / yield_factor + k)
+# RE, ST, OTR: yield_factor = 1.0, k = 0  (Updated_Requirement = Requirement)
+# yield_factor = fraction of products meeting top-quality spec (e.g. 0.95 = 95%)
+# k = extra safety units to add on top of the yield-adjusted requirement
+# ---------------------------------------------------------------------------
+YIELD_FACTORS = {
+    'OE':  float(_get("YIELD_FACTOR_OE")),
+    'EXP': float(_get("YIELD_FACTOR_EXP")),
+}
+YIELD_K = {
+    'OE':  int(_get("YIELD_K_OE")),
+    'EXP': int(_get("YIELD_K_EXP")),
 }
 
 # ---------------------------------------------------------------------------
@@ -147,10 +166,14 @@ CONSOLIDATED_WEIGHTS = {
 }
 
 # ---------------------------------------------------------------------------
-# 10. HISTORY PENETRATION LOOKBACK WINDOW
-# Number of past days to check for consecutive black streak scoring.
+# 10. HISTORY PENETRATION PARAMETERS
+# HISTORY_PENETRATION_N     : lookback window (days); max possible score.
+# HISTORY_PENETRATION_BLACK : minimum penetration % for a day to count as "black".
+#   Default = 100 (only fully-depleted days count).
+#   Lower values (e.g. 95) are more lenient — days at 95%+ also count.
 # ---------------------------------------------------------------------------
-HISTORY_PENETRATION_N = int(_get("HISTORY_PENETRATION_N"))
+HISTORY_PENETRATION_N     = int(_get("HISTORY_PENETRATION_N"))
+HISTORY_PENETRATION_BLACK = float(_get("HISTORY_PENETRATION_BLACK"))
 
 # ---------------------------------------------------------------------------
 # 11. PRODUCTION CONSTANTS

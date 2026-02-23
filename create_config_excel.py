@@ -18,16 +18,18 @@ OUTPUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config_i
 # Stage 1 Config Parameters
 # ---------------------------------------------------------------------------
 stage1_rows = [
-    # --- Market Weights ---
+    # --- Market Weights (Higher number = Higher Priority) ---
     ("MARKET_WEIGHTS_OE",                  4,    ""),
     ("MARKET_WEIGHTS_ST",                  3,    ""),
     ("MARKET_WEIGHTS_EXP",                 2,    ""),
+    ("MARKET_WEIGHTS_OTR",                 2,    ""),  # Off-the-road tyres — same default as EXP
     ("MARKET_WEIGHTS_RE",                  1,    ""),
-    # --- Market Priority ---
+    # --- Market Priority (For ranking — lower number = higher priority) ---
     ("MARKET_PRIORITY_OE",                 1,    ""),
     ("MARKET_PRIORITY_ST",                 2,    ""),
     ("MARKET_PRIORITY_EXP",               3,    ""),
-    ("MARKET_PRIORITY_RE",                 4,    ""),
+    ("MARKET_PRIORITY_OTR",               4,    ""),  # Off-the-road tyres
+    ("MARKET_PRIORITY_RE",                 5,    ""),
     # --- Location Weights ---
     ("LOCATION_WEIGHTS_JIT",               5,    ""),
     ("LOCATION_WEIGHTS_Depot",             4,    ""),
@@ -39,6 +41,7 @@ stage1_rows = [
     ("RE_NORM_MULTIPLIER",                 1.0,  ""),
     ("OE_NORM_MULTIPLIER",                 1.0,  ""),
     ("ST_NORM_MULTIPLIER",                 1.0,  ""),
+    ("OTR_NORM_MULTIPLIER",                1.0,  ""),  # Off-the-road tyres
     # --- Scoring Params ---
     ("SCORING_market_weightage",           0.25, ""),
     ("SCORING_penetration_weightage",      0.35, ""),
@@ -59,6 +62,16 @@ stage1_rows = [
     # N = number of past days to look back for consecutive black streak scoring
     # Score = consecutive black days from today (max N); Red today = 0
     ("HISTORY_PENETRATION_N",              10,   ""),
+    ("HISTORY_PENETRATION_BLACK",          100,  ""),  # Min penetration % to count a day as "black"
+    # --- Yield Factor (Quality Adjustment for Updated_Requirement in Stage 3) ---
+    # OE and EXP: Updated_Requirement = ceil(Requirement / yield_factor + k)
+    # RE, ST, OTR and others: yield_factor = 1.0, k = 0  (Updated_Requirement = Requirement)
+    # yield_factor represents top-quality product ratio (e.g. 0.95 = 95% top quality)
+    # k is the extra safety buffer (number of additional products to produce)
+    ("YIELD_FACTOR_OE",                   0.95, ""),  # 95% top-quality for OE
+    ("YIELD_FACTOR_EXP",                  0.95, ""),  # 95% top-quality for EXP
+    ("YIELD_K_OE",                        0,    ""),  # Extra buffer for OE (units)
+    ("YIELD_K_EXP",                       0,    ""),  # Extra buffer for EXP (units)
     # --- Production Constants ---
     ("EFFICIENCY_FACTOR",                  0.9,  ""),
     ("DEFAULT_ASP",                        3000, ""),

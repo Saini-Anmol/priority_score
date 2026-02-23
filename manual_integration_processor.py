@@ -284,7 +284,7 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
     # Zero is the correct sentinel for missing demand/inventory data.
     _NUMERIC_FILL_ZERO = [
         'Norm ', 'Virtual Norm', 'Adjusted_Target', 'Stock',
-        'Requirement', 'Vector_Requirement', 'CPT_Requirement',
+        'Requirement', 'Updated_Requirement', 'Vector_Requirement', 'CPT_Requirement',
         'Penetration', 'NormPenetration', 'NormRequirement',
         'PriorityScore_Inventory', 'NormInventoryScore',
         'HistoryPenetrationScore', 'NormHistoryPenetrationScore',
@@ -347,7 +347,7 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
         'Market', 'Norm ', 'Virtual Norm', 'Adjusted_Target',
 
         # --- Group 5: Demand Signals (Data Story: Vector Need → CPT Override → Final Gap) ---
-        'Stock', 'Vector_Requirement', 'CPT_Requirement', 'Requirement', 'Penetration',
+        'Stock', 'Vector_Requirement', 'CPT_Requirement', 'Requirement', 'Updated_Requirement', 'Penetration',
         'NormPenetration', 'NormRequirement',
 
         # --- Group 6: SKU Attributes ---
