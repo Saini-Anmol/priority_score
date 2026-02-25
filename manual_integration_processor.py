@@ -300,7 +300,7 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
             hybrid_df[col] = pd.to_numeric(hybrid_df[col], errors='coerce').fillna(0)
 
     # String columns: fill NaN with empty string so no cell shows 'NaN'
-    _STRING_FILL_EMPTY = ['SKU Description', 'Top SKU', 'Source']
+    _STRING_FILL_EMPTY = ['SKU Description', 'Source']
     for col in _STRING_FILL_EMPTY:
         if col in hybrid_df.columns:
             hybrid_df[col] = hybrid_df[col].fillna('')
@@ -351,7 +351,7 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
         'NormPenetration', 'NormRequirement',
 
         # --- Group 6: SKU Attributes ---
-        'Top SKU', 'TopSKUFlag', 'MarketWeight', 'priority',
+        'TopSKUFlag', 'MarketWeight', 'priority',
 
         # --- Group 7: Inventory Signals ---
         'PriorityScore_Inventory', 'NormInventoryScore',

@@ -49,6 +49,7 @@ Vector_Project/
 ├── app_stage3.py                  # Stage 1 + 2 + 3 integrated runner (full pipeline)
 ├── create_config_excel.py         # One-time script to generate config_input.xlsx
 ├── config_input.xlsx              # Master configuration file (Excel)
+├── PROCESS_DOCUMENTATION.md      # Detailed process & formula documentation
 ├── requirements.txt               # Python dependencies
 ├── .gitignore
 └── data/                          # Data directory (not tracked by git)
@@ -253,8 +254,10 @@ Penetration = (Virtual Norm − Stock) / Virtual Norm × 100
 Min-max normalisation across all SKUs in the same date batch, so each metric contributes equally to the score regardless of scale.
 
 ```
-NormPenetration  = Penetration  / max(Penetration)   [across all SKUs]
-NormRequirement  = Requirement  / max(Requirement)   [across all SKUs]
+NormPenetration  = (Penetration  − min(Penetration))  / (max(Penetration)  − min(Penetration))
+NormRequirement  = (Requirement  − min(Requirement))  / (max(Requirement)  − min(Requirement))
+
+# Both return 0.0 everywhere when max == min (avoids division by zero)
 ```
 
 ---
@@ -308,10 +311,13 @@ PriorityScore = (MarketWeight        × market_weightage)     [default: 0.25]
 
 #### `NormInventoryScore`
 
-Normalises the raw inventory score to the same [0, 1] range as `PriorityScore`.
+Min-max normalises the raw inventory score to [0, 1].
 
 ```
-NormInventoryScore = PriorityScore_Inventory / max(PriorityScore_Inventory)  [across all SKUs]
+NormInventoryScore = (PriorityScore_Inventory − min(PriorityScore_Inventory))
+                   / (max(PriorityScore_Inventory) − min(PriorityScore_Inventory))
+
+# Returns 0.0 everywhere when max == min
 ```
 
 ---
@@ -327,7 +333,8 @@ Counts how many **consecutive days from today backward** a SKU was in **Black** 
 HistoryPenetrationScore = 0                        (if SKU is Red today)
 HistoryPenetrationScore = consecutive black days   (if SKU is Black today, capped at N)
 
-NormHistoryPenetrationScore = HistoryPenetrationScore / N
+NormHistoryPenetrationScore = (HistoryPenetrationScore − min) / (max − min)
+# Returns 0.0 everywhere when max == min
 ```
 
 **Example (N = 10):**
@@ -377,16 +384,21 @@ Daily revenue a single machine generates for this SKU.
 rev_pot = ASP × daily_cure
 ```
 
-> `ASP` (Average Selling Price) is computed from DISPATCH1.csv as `Amt.in loc.cur. / Quantity` per material, averaged over all dispatches for Plant 1300. Default ASP is used when no dispatch history exists for a SKU.
+> `ASP` (Average Selling Price) is computed from `DISPATCH1.csv` as `Amt.in loc.cur. / Quantity`, then grouped by **(Material, Market_Group)** for Plant 1300.
+>
+> - **OE market** SKUs use the ASP averaged from OE-channel transactions only.
+> - **All other markets** (RE, ST, OTR, EXP) share the RE-channel ASP.
+> - Falls back to `DEFAULT_ASP` when no dispatch history exists for a (SKU, market group) pair.
 
 ---
 
 #### `price_priority`
 
-Normalised revenue potential.
+Min-max normalised revenue potential.
 
 ```
-price_priority = rev_pot / max(rev_pot)   [across all SKUs]
+price_priority = (rev_pot − min(rev_pot)) / (max(rev_pot) − min(rev_pot))
+# Returns 0.0 everywhere when max == min
 ```
 
 ---
@@ -541,38 +553,38 @@ Final Rank = row index + 1   (after all sorting is complete)
 
 ### Group 4 — Demand Signals
 
-| Column               | Description                                                                 |
-| -------------------- | --------------------------------------------------------------------------- |
-| `Stock`              | Current on-hand stock                                                       |
-| `Vector_Requirement` | Stage 1/2 automated requirement (before any override)                       |
-| `CPT_Requirement`    | Manual override quantity (Stage 3 only)                                     |
-| `Requirement`        | Final requirement used for calculations                                     |
-| `Penetration`        | `(Virtual Norm − Stock) / Virtual Norm × 100` (always 100% of Virtual Norm) |
-| `NormPenetration`    | `Penetration / max(Penetration)`                                            |
-| `NormRequirement`    | `Requirement / max(Requirement)`                                            |
+| Column                | Description                                                                                  |
+| --------------------- | -------------------------------------------------------------------------------------------- |
+| `Stock`               | Current on-hand stock                                                                        |
+| `Vector_Requirement`  | Stage 1/2 automated requirement (before any override)                                        |
+| `CPT_Requirement`     | Manual override quantity (Stage 3 only)                                                      |
+| `Requirement`         | Final requirement used for calculations                                                      |
+| `Updated_Requirement` | Yield-adjusted requirement for OE/EXP: `⌈Req / yield_factor + k⌉`; = `Requirement` otherwise |
+| `Penetration`         | `(Virtual Norm − Stock) / Virtual Norm × 100` (always 100% of Virtual Norm)                  |
+| `NormPenetration`     | Min-max of Penetration: `(x − min) / (max − min)`                                            |
+| `NormRequirement`     | Min-max of Requirement: `(x − min) / (max − min)`                                            |
 
 ### Group 5 — SKU Attributes
 
 | Column         | Description                                                                |
 | -------------- | -------------------------------------------------------------------------- |
-| `Top SKU`      | `T` if flagged as a Top SKU in BPR, else blank                             |
-| `TopSKUFlag`   | Binary: `1` if Top SKU, else `0`                                           |
-| `MarketWeight` | Numeric weight for market (OE=4, ST=3, EXP=2, RE=1)                        |
+| `TopSKUFlag`   | Binary: `1` if Top SKU (from BPR), else `0`                                |
+| `MarketWeight` | Numeric weight for market (OE=4, ST=3, EXP=2, OTR=2, RE=1)                 |
 | `priority`     | Sortable tuple: `(−MarketWeight, −Penetration, −Requirement, −TopSKUFlag)` |
 
 ### Group 6 — Inventory Signals
 
-| Column                    | Description                                              |
-| ------------------------- | -------------------------------------------------------- |
-| `PriorityScore_Inventory` | Weighted sum of Red/Black stockouts across all locations |
-| `NormInventoryScore`      | `PriorityScore_Inventory / max(PriorityScore_Inventory)` |
+| Column                    | Description                                                     |
+| ------------------------- | --------------------------------------------------------------- |
+| `PriorityScore_Inventory` | Weighted sum of Red/Black stockouts across all locations        |
+| `NormInventoryScore`      | Min-max of `PriorityScore_Inventory`: `(x − min) / (max − min)` |
 
 ### Group 6b — History Penetration
 
-| Column                        | Description                                              |
-| ----------------------------- | -------------------------------------------------------- |
-| `HistoryPenetrationScore`     | Consecutive black days from today backward (0 – N)       |
-| `NormHistoryPenetrationScore` | `HistoryPenetrationScore / N` — normalized for score use |
+| Column                        | Description                                                     |
+| ----------------------------- | --------------------------------------------------------------- |
+| `HistoryPenetrationScore`     | Consecutive black days from today backward (0 – N)              |
+| `NormHistoryPenetrationScore` | Min-max of `HistoryPenetrationScore`: `(x − min) / (max − min)` |
 
 ### Group 7 — Deployment Metrics & Flags (Stage 2+)
 
@@ -589,13 +601,13 @@ Final Rank = row index + 1   (after all sorting is complete)
 
 ### Group 8 — Revenue & Efficiency
 
-| Column           | Description                                                                    |
-| ---------------- | ------------------------------------------------------------------------------ |
-| `ASP`            | Average Selling Price from dispatch data (₹ per unit)                          |
-| `Cure Time`      | Curing cycle time from static file (minutes)                                   |
-| `daily_cure`     | `⌈(1440 / (Cure Time + 2.5)) × Efficiency_Factor⌉` — units per day per machine |
-| `rev_pot`        | `ASP × daily_cure` — daily revenue potential per machine (₹)                   |
-| `price_priority` | `rev_pot / max(rev_pot)` — normalised revenue score                            |
+| Column           | Description                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------- |
+| `ASP`            | Avg Selling Price from dispatch, grouped by **(Material, Market_Group)** — OE or RE-channel |
+| `Cure Time`      | Curing cycle time from static file (minutes)                                                |
+| `daily_cure`     | `⌈(1440 / (Cure Time + 2.5)) × Efficiency_Factor⌉` — units per day per machine              |
+| `rev_pot`        | `ASP × daily_cure` — daily revenue potential per machine (₹)                                |
+| `price_priority` | Min-max of `rev_pot`: `(x − min) / (max − min)` — normalised revenue score                  |
 
 ### Group 9 — Scoring & Ranking
 

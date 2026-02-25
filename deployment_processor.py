@@ -287,7 +287,7 @@ def process_deployment_analysis(demand_df, date_str):
         'NormPenetration', 'NormRequirement',
 
         # --- Group 4: SKU Attributes ---
-        'Top SKU', 'TopSKUFlag', 'MarketWeight', 'priority',
+        'TopSKUFlag', 'MarketWeight', 'priority',
 
         # --- Group 5: Inventory Signals ---
         'PriorityScore_Inventory', 'NormInventoryScore',

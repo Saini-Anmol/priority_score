@@ -8,6 +8,22 @@ import config # Import the settings
 
 
 # ---------------------------------------------------------------------------
+# MIN-MAX NORMALISATION HELPER
+# ---------------------------------------------------------------------------
+
+def _minmax(series: pd.Series) -> pd.Series:
+    """
+    Min-max normalize a Series to [0, 1].
+    Formula: (x - min) / (max - min)
+    Returns 0.0 everywhere when max == min (avoids division by zero).
+    """
+    mn, mx = series.min(), series.max()
+    if mx == mn:
+        return pd.Series(0.0, index=series.index)
+    return (series - mn) / (mx - mn)
+
+
+# ---------------------------------------------------------------------------
 # HISTORY PENETRATION HELPER
 # ---------------------------------------------------------------------------
 
@@ -301,8 +317,8 @@ def process_single_date(date_str):
     combined['MarketWeight'] = combined['Market'].map(config.MARKET_WEIGHTS)
     combined['TopSKUFlag'] = combined['Top SKU'].apply(lambda x: 1 if x == 'T' else 0)
     
-    combined['NormPenetration'] = combined['Penetration'] / combined['Penetration'].max()
-    combined['NormRequirement'] = combined['Requirement'] / combined['Requirement'].max()
+    combined['NormPenetration'] = _minmax(combined['Penetration'])
+    combined['NormRequirement'] = _minmax(combined['Requirement'])
 
     # Generate priority tuple — uses -MarketWeight as lead key (higher weight = higher urgency)
     # MarketPriority removed: MarketWeight already encodes the same ordering (higher = more important)
@@ -320,15 +336,38 @@ def process_single_date(date_str):
 
     # --- REVENUE & EFFICIENCY (Dispatch & Curing) ---
     combined = combined.merge(pivoted[['SKUCode', 'PriorityScore_Inventory']], on='SKUCode', how='left').fillna(0)
-    combined['NormInventoryScore'] = combined['PriorityScore_Inventory'] / combined['PriorityScore_Inventory'].max()
+    combined['NormInventoryScore'] = _minmax(combined['PriorityScore_Inventory'])
 
     dispatch = pd.read_csv(f"{config.BASE_DATA_PATH}/DISPATCH1.csv", encoding='ISO-8859-1')
     dispatch['Amt.in loc.cur.'] = dispatch['Amt.in loc.cur.'].replace({',': ''}, regex=True)
     dispatch['Amt.in loc.cur.'] = pd.to_numeric(dispatch['Amt.in loc.cur.'], errors='coerce')
     dispatch['Quantity'] = pd.to_numeric(dispatch['Quantity'], errors='coerce')
     dispatch['ASP'] = dispatch['Amt.in loc.cur.'] / dispatch['Quantity']
-    asp_map = dispatch[dispatch['Plant'] == 1300].groupby(['Material'])['ASP'].mean()
-    combined['ASP'] = combined['SKUCode'].map(asp_map).fillna(config.DEFAULT_ASP)
+
+    # --- MARKET-AWARE ASP ---
+    # OE market uses OE-channel ASP; all other markets (RE, ST, OTR, EXP) share the RE-channel ASP.
+    # We derive the market group from each SKU's Market column in combined,
+    # join it onto the dispatch rows, then group by (Material, Market_Group).
+    combined['_mkt_grp'] = combined['Market'].apply(lambda m: 'OE' if m == 'OE' else 'RE')
+
+    sku_mkt_map = (
+        combined[['SKUCode', '_mkt_grp']]
+        .drop_duplicates()
+        .rename(columns={'SKUCode': 'Material', '_mkt_grp': 'Market_Group'})
+    )
+
+    dispatch_1300 = dispatch[dispatch['Plant'] == 1300].copy()
+    dispatch_1300['Material'] = dispatch_1300['Material'].astype(str)
+    dispatch_merged = dispatch_1300.merge(sku_mkt_map, on='Material', how='left')
+    dispatch_merged['Market_Group'] = dispatch_merged['Market_Group'].fillna('RE')
+
+    asp_map = dispatch_merged.groupby(['Material', 'Market_Group'])['ASP'].mean()
+
+    combined['ASP'] = combined.apply(
+        lambda row: asp_map.get((row['SKUCode'], row['_mkt_grp']), config.DEFAULT_ASP),
+        axis=1
+    )
+    combined.drop(columns=['_mkt_grp'], inplace=True)
 
     curing = pd.read_csv(f"{config.BASE_DATA_PATH}/curing_cycletime.csv").sort_values('Cure Time', ascending=False).drop_duplicates('SKUCode')
     combined = combined.merge(curing[['SKUCode', 'Cure Time']], on='SKUCode', how='left')
@@ -336,7 +375,7 @@ def process_single_date(date_str):
     
     combined['daily_cure'] = np.ceil((1440 / combined['Cure Time']) * config.EFFICIENCY_FACTOR).astype(int)
     combined['rev_pot'] = combined['ASP'] * combined['daily_cure']
-    combined['price_priority'] = combined['rev_pot'] / combined['rev_pot'].max()
+    combined['price_priority'] = _minmax(combined['rev_pot'])
 
     # --- HISTORY PENETRATION SCORING ---
     # Discrete streak count [0, N]:
@@ -349,7 +388,7 @@ def process_single_date(date_str):
     history_scores = compute_history_penetration(bpr_v, bor_v, date_str, n_days)
     combined['HistoryPenetrationScore'] = combined['SKUCode'].map(history_scores).fillna(0).astype(int)
     # Normalize to [0, 1]: max possible score = n_days (discrete integer, so divide by N)
-    combined['NormHistoryPenetrationScore'] = combined['HistoryPenetrationScore'] / n_days
+    combined['NormHistoryPenetrationScore'] = _minmax(combined['HistoryPenetrationScore'])
 
     # CONSOLIDATED SCORE (Demand + Inventory + Price + History Penetration)
     # Weights are fully configurable via config_input.xlsx.
@@ -390,7 +429,7 @@ def process_single_date(date_str):
         'NormPenetration', 'NormRequirement',
 
         # --- Group 4: Market & SKU Attributes ---
-        'Top SKU', 'TopSKUFlag', 'MarketWeight', 'priority',
+        'TopSKUFlag', 'MarketWeight', 'priority',
 
         # --- Group 5: Inventory Signals ---
         'PriorityScore_Inventory', 'NormInventoryScore',
