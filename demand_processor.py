@@ -412,8 +412,8 @@ def process_single_date(date_str):
     combined['Penetration'] = combined['Penetration'].round(2)
     # All score columns: 3 decimal places
     for _score_col in [
-        'PriorityScore', 'NormInventoryScore', 'PriceScore',
-        'NormHistoryPenetrationScore', 'ConsolidatedPriorityScore',
+        'PriorityScore', 'PriceScore',
+        'ConsolidatedPriorityScore',
     ]:
         if _score_col in combined.columns:
             combined[_score_col] = combined[_score_col].round(3)
@@ -421,28 +421,30 @@ def process_single_date(date_str):
     # SELECT ONLY REQUIRED COLUMNS (matching original output)
     # Columns ordered to tell a clear left-to-right story:
     # Group 1: Identification (Who)
-    # Group 2: Targets (Goal)
+    # Group 2: Targets + Market context (Goal)
     # Group 3: Demand Signals (How urgent?)
-    # Group 4: Market & SKU Attributes (Context)
+    # Group 4: SKU Attributes (Context)
     # Group 5: Inventory Signals (Stock health)
     # Group 6: Revenue & Efficiency (Value)
     # Group 7: History Penetration (Streak)
     # Group 8: Scoring & Ranking (Final verdict)
+    # NOTE: 'priority' tuple, 'NormInventoryScore', 'NormHistoryPenetrationScore'
+    #        are computed internally for scoring but intentionally excluded here.
     output_columns = [
         # --- Group 1: Identification ---
         'SKUCode', 'SKU Description', 'size',
 
-        # --- Group 2: Targets ---
-        'Market', 'Norm ', 'Virtual Norm', 'Adjusted_Target',
+        # --- Group 2: Targets + Market context ---
+        'Market', 'MarketWeight', 'Norm ', 'Virtual Norm', 'Adjusted_Target',
 
         # --- Group 3: Demand Signals ---
         'Stock', 'Requirement', 'Penetration',
 
-        # --- Group 4: Market & SKU Attributes ---
-        'TopSKUFlag', 'MarketWeight', 'priority',
+        # --- Group 4: SKU Attributes ---
+        'TopSKUFlag',
 
         # --- Group 5: Inventory Signals ---
-        'InventoryScore', 'NormInventoryScore',
+        'InventoryScore',
 
         # --- Group 6: Revenue & Efficiency ---
         'ASP', 'Cure Time', 'daily_cure', 'PriceScore',
