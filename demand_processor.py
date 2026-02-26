@@ -260,13 +260,13 @@ def process_single_date(date_str):
     pivoted.columns = [f"{color}_{loc}" for color, loc in pivoted.columns]
     pivoted.reset_index(inplace=True)
 
-    pivoted['PriorityScore_Inventory'] = 0
+    pivoted['InventoryScore'] = 0
     for loc, weight in config.LOCATION_WEIGHTS.items():
         b_col, r_col = f'Black Count_{loc}', f'Red Count_{loc}'
         if b_col in pivoted.columns:
-            pivoted['PriorityScore_Inventory'] += pivoted[b_col] * weight * config.INVENTORY_SCORE_FACTORS["black"]
+            pivoted['InventoryScore'] += pivoted[b_col] * weight * config.INVENTORY_SCORE_FACTORS["black"]
         if r_col in pivoted.columns:
-            pivoted['PriorityScore_Inventory'] += pivoted[r_col] * weight * config.INVENTORY_SCORE_FACTORS["red"]
+            pivoted['InventoryScore'] += pivoted[r_col] * weight * config.INVENTORY_SCORE_FACTORS["red"]
 
     # --- DEMAND SCORING (BOR & BMR) ---
     bor_v = bor_v[bor_v['Location Code'].str.startswith('1300')].copy()
@@ -335,8 +335,8 @@ def process_single_date(date_str):
     )
 
     # --- REVENUE & EFFICIENCY (Dispatch & Curing) ---
-    combined = combined.merge(pivoted[['SKUCode', 'PriorityScore_Inventory']], on='SKUCode', how='left').fillna(0)
-    combined['NormInventoryScore'] = _minmax(combined['PriorityScore_Inventory'])
+    combined = combined.merge(pivoted[['SKUCode', 'InventoryScore']], on='SKUCode', how='left').fillna(0)
+    combined['NormInventoryScore'] = _minmax(combined['InventoryScore'])
 
     dispatch = pd.read_csv(f"{config.BASE_DATA_PATH}/DISPATCH1.csv", encoding='ISO-8859-1')
     dispatch['Amt.in loc.cur.'] = dispatch['Amt.in loc.cur.'].replace({',': ''}, regex=True)
@@ -375,7 +375,7 @@ def process_single_date(date_str):
     
     combined['daily_cure'] = np.ceil((1440 / combined['Cure Time']) * config.EFFICIENCY_FACTOR).astype(int)
     combined['rev_pot'] = combined['ASP'] * combined['daily_cure']
-    combined['price_priority'] = _minmax(combined['rev_pot'])
+    combined['PriceScore'] = _minmax(combined['rev_pot'])
 
     # --- HISTORY PENETRATION SCORING ---
     # Discrete streak count [0, N]:
@@ -397,7 +397,7 @@ def process_single_date(date_str):
     combined['ConsolidatedPriorityScore'] = (
         combined['PriorityScore']            * config.CONSOLIDATED_WEIGHTS["demand_priority"] +
         combined['NormInventoryScore']       * config.CONSOLIDATED_WEIGHTS["inventory_priority"] +
-        combined['price_priority']           * config.CONSOLIDATED_WEIGHTS["price_priority"] +
+        combined['PriceScore']               * config.CONSOLIDATED_WEIGHTS["price_priority"] +
         combined['NormHistoryPenetrationScore'] * config.CONSOLIDATED_WEIGHTS["history_penetration"]
     )
 
@@ -406,6 +406,17 @@ def process_single_date(date_str):
 
     # Sort by consolidated rank
     combined = combined.sort_values(by='Rank_ConsolidatedPriorityScore', ascending=True)
+
+    # --- ROUNDING ---
+    # Penetration: 2 decimal places
+    combined['Penetration'] = combined['Penetration'].round(2)
+    # All score columns: 3 decimal places
+    for _score_col in [
+        'PriorityScore', 'NormInventoryScore', 'PriceScore',
+        'NormHistoryPenetrationScore', 'ConsolidatedPriorityScore',
+    ]:
+        if _score_col in combined.columns:
+            combined[_score_col] = combined[_score_col].round(3)
 
     # SELECT ONLY REQUIRED COLUMNS (matching original output)
     # Columns ordered to tell a clear left-to-right story:
@@ -426,27 +437,26 @@ def process_single_date(date_str):
 
         # --- Group 3: Demand Signals ---
         'Stock', 'Requirement', 'Penetration',
-        'NormPenetration', 'NormRequirement',
 
         # --- Group 4: Market & SKU Attributes ---
         'TopSKUFlag', 'MarketWeight', 'priority',
 
         # --- Group 5: Inventory Signals ---
-        'PriorityScore_Inventory', 'NormInventoryScore',
+        'InventoryScore', 'NormInventoryScore',
 
         # --- Group 6: Revenue & Efficiency ---
-        'ASP', 'Cure Time', 'daily_cure', 'rev_pot', 'price_priority',
+        'ASP', 'Cure Time', 'daily_cure', 'PriceScore',
 
         # --- Group 7: History Penetration ---
-        'HistoryPenetrationScore', 'NormHistoryPenetrationScore',
+        'HistoryPenetrationScore',
 
         # --- Group 8: Scoring & Ranking ---
         'PriorityScore',
         'ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore',
     ]
-    
+
     # Only select columns that exist
     available_cols = [col for col in output_columns if col in combined.columns]
     combined = combined[available_cols]
-    
+
     return combined
