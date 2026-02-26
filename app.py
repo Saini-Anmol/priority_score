@@ -26,10 +26,12 @@ def run_report():
             df_dict[current_date] = df
 
     if df_dict:
-        with pd.ExcelWriter(config.OUTPUT_FILE) as writer:
+        output_end_date = end_date.strftime("%d%m%Y")
+        output_file = f"combined_vector_demand_{output_end_date}.xlsx"
+        with pd.ExcelWriter(output_file) as writer:
             for date, data in df_dict.items():
                 data.to_excel(writer, sheet_name=date, index=False)
-        print(f"Successfully generated: {config.OUTPUT_FILE}")
+        print(f"Successfully generated: {output_file}")
     else:
         print("Error: No data found for the selected range.")
 

@@ -435,7 +435,7 @@ def process_single_date(date_str):
         'SKUCode', 'SKU Description', 'size',
 
         # --- Group 2: Targets + Market context ---
-        'Market', 'MarketWeight', 'Norm ', 'Virtual Norm', 'Adjusted_Target',
+        'Market', 'Norm ', 'Virtual Norm', 'Adjusted_Target',
 
         # --- Group 3: Demand Signals ---
         'Stock', 'Requirement', 'Penetration',
@@ -447,7 +447,7 @@ def process_single_date(date_str):
         'InventoryScore',
 
         # --- Group 6: Revenue & Efficiency ---
-        'ASP', 'Cure Time', 'daily_cure', 'PriceScore',
+        'ASP', 'Cure Time', 'PriceScore',
 
         # --- Group 7: History Penetration ---
         'HistoryPenetrationScore',
