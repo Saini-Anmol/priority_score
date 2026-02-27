@@ -1,120 +1,135 @@
 # test_stage2.py
-# Test script for Stage 2 deployment analysis
+# Test script for Stage 2: Frontend / Manual Integration pipeline
 
+import os
 import pandas as pd
 from datetime import datetime
 from demand_processor import process_single_date
-from deployment_processor import (
-    clean_mould_report,
-    merge_demand_with_deployment,
-    calculate_proxy_penetration,
-    apply_gap_flags
+from frontend_processor import (
+    _load_manual_data,
+    _compute_super_boost_score,
+    process_frontend_override,
 )
+
 
 def test_stage2_pipeline():
     """
-    Test the Stage 2 pipeline with a known date.
+    Test the new Stage 2 pipeline (Stage 1 + Frontend Manual Integration).
     """
     print("=" * 80)
-    print("STAGE 2 DEPLOYMENT ANALYSIS - TEST SUITE")
+    print("STAGE 2 FRONTEND INTEGRATION — TEST SUITE")
     print("=" * 80)
-    
-    test_date = "02012026"  # Known date with complete data files
-    
+
+    test_date = "25022026"  # Adjust to a date with known data files
+
     print(f"\nTest Date: {test_date}")
     print("-" * 80)
-    
+
     # ========================================================================
-    # TEST 1: Mould Report Loading
+    # TEST 1: Stage 1 Demand Processing
     # ========================================================================
-    print("\n[TEST 1] Mould Report Loading and Cleaning")
+    print("\n[TEST 1] Stage 1 Demand Processing")
     print("-" * 40)
-    
-    mould_df = clean_mould_report(test_date)
-    
-    if mould_df is not None and not mould_df.empty:
-        print(f"✓ Successfully loaded mould report")
-        print(f"  - SKUs found: {len(mould_df)}")
-        print(f"  - Columns: {list(mould_df.columns)}")
-        print(f"\nSample data:")
-        print(mould_df.head())
-    else:
-        print("✗ Failed to load mould report")
-        return
-    
-    # ========================================================================
-    # TEST 2: Stage 1 Processing
-    # ========================================================================
-    print("\n[TEST 2] Stage 1 Demand Processing")
-    print("-" * 40)
-    
+
     demand_df = process_single_date(test_date)
-    
+
     if demand_df is not None and not demand_df.empty:
         print(f"✓ Successfully processed Stage 1")
         print(f"  - SKUs found: {len(demand_df)}")
         print(f"  - Has ConsolidatedPriorityScore: {'ConsolidatedPriorityScore' in demand_df.columns}")
+        print(f"  - Has Rank_ConsolidatedPriorityScore: {'Rank_ConsolidatedPriorityScore' in demand_df.columns}")
     else:
-        print("✗ Failed to process Stage 1")
+        print("✗ Failed to process Stage 1 — check input data files for this date")
         return
-    
+
     # ========================================================================
-    # TEST 3: Master Join
+    # TEST 2: Manual Data Loading
     # ========================================================================
-    print("\n[TEST 3] Master Join (Demand + Mould)")
+    print("\n[TEST 2] Manual Frontend Demand File Loading")
     print("-" * 40)
-    
-    merged_df = merge_demand_with_deployment(demand_df, mould_df)
-    
-    if not merged_df.empty:
-        print(f"✓ Successfully merged datasets")
-        print(f"  - Total SKUs: {len(merged_df)}")
-        print(f"  - SKUs with machines: {(merged_df['MachineCount'] > 0).sum()}")
-        print(f"  - SKUs without machines: {(merged_df['MachineCount'] == 0).sum()}")
+
+    manual_file = "./data/manual_frontend_demand.xlsx"
+    if not os.path.exists(manual_file):
+        print(f"⚠ Manual file not found at '{manual_file}' — skipping load test.")
+        print("  Stage 2 will still run (returns automated-only output).")
+        manual_df = None
     else:
-        print("✗ Join resulted in empty dataframe")
-        return
-    
+        try:
+            manual_df = _load_manual_data()
+            print(f"✓ Successfully loaded manual demand file")
+            print(f"  - Manual entries: {len(manual_df)}")
+            print(f"  - Columns: {list(manual_df.columns)}")
+            print(f"\nSample data:")
+            print(manual_df.head())
+        except Exception as e:
+            print(f"✗ Failed to load manual file: {e}")
+            manual_df = None
+
     # ========================================================================
-    # TEST 4: Proxy Penetration Calculation
+    # TEST 3: Boost Score Calculation
     # ========================================================================
-    print("\n[TEST 4] Proxy Penetration Calculation")
+    if manual_df is not None and not manual_df.empty:
+        print("\n[TEST 3] Super-Boost Score Calculation")
+        print("-" * 40)
+
+        scored_df = _compute_super_boost_score(manual_df.copy())
+
+        if "ManualPriorityScore" in scored_df.columns:
+            print(f"✓ ManualPriorityScore calculated")
+            print(f"  - Range: {scored_df['ManualPriorityScore'].min():.1f} to {scored_df['ManualPriorityScore'].max():.1f}")
+            print(f"  - (All automated scores are ≤ 1.0 — manual scores are always higher)")
+            print(f"\nManual ranking preview:")
+            preview = scored_df[["SKUCode", "Market", "Quantity", "HighestPriority", "ManualPriorityScore", "ManualRank"]].head(5)
+            print(preview.to_string(index=False))
+        else:
+            print("✗ ManualPriorityScore not found")
+
+    # ========================================================================
+    # TEST 4: Full Stage 2 Integration
+    # ========================================================================
+    print("\n[TEST 4] Full Stage 2 Pipeline (process_frontend_override)")
     print("-" * 40)
-    
-    merged_df = calculate_proxy_penetration(merged_df)
-    
-    if 'ProxyPenetration' in merged_df.columns and 'ProxyRank' in merged_df.columns:
-        print(f"✓ Proxy Penetration calculated")
-        print(f"  - Range: {merged_df['ProxyPenetration'].min():.4f} to {merged_df['ProxyPenetration'].max():.4f}")
-        print(f"\nSample comparison (Top 5):")
-        sample = merged_df[['SKUCode', 'MachineCount', 'ConsolidatedPriorityScore', 'ProxyPenetration', 'ProxyRank']].head()
-        print(sample.to_string(index=False))
+
+    final_df = process_frontend_override(demand_df, test_date)
+
+    if final_df is not None and not final_df.empty:
+        print(f"✓ Stage 2 pipeline completed successfully")
+        print(f"  - Total rows in output: {len(final_df)}")
+        print(f"  - Columns: {list(final_df.columns)}")
+
+        # Check key columns
+        expected_cols = ["Final Rank", "Source", "StrategicPriorityScore",
+                         "Vector_Requirement", "CPT_Requirement"]
+        for col in expected_cols:
+            status = "✓" if col in final_df.columns else "✗ MISSING"
+            print(f"  - {status}: '{col}'")
+
+        # Check no mould columns leaked in
+        mould_cols = ["MachineCount", "AvgMouldHealth", "CriticalGap",
+                      "ExcessProduction", "MouldAlert", "IsGhostSKU", "ProxyPenetration"]
+        leaked = [c for c in mould_cols if c in final_df.columns]
+        if leaked:
+            print(f"  ✗ WARNING: Mould columns found (should not be in Stage 2): {leaked}")
+        else:
+            print(f"  ✓ No mould/machine columns in output (correct for Stage 2)")
+
+        # Source distribution
+        if "Source" in final_df.columns:
+            source_counts = final_df["Source"].value_counts()
+            print(f"\nSource distribution:")
+            for src, count in source_counts.items():
+                print(f"  • {src}: {count} rows")
+
+        # Top 5 rows
+        print(f"\nTop 5 rows by Final Rank:")
+        preview_cols = [c for c in ["Final Rank", "SKUCode", "Source", "Market",
+                                     "StrategicPriorityScore", "HighestPriority"] if c in final_df.columns]
+        print(final_df[preview_cols].head(5).to_string(index=False))
+
     else:
-        print("✗ Failed to calculate Proxy Penetration")
+        print("✗ Stage 2 pipeline returned empty output")
         return
-    
-    # ========================================================================
-    # TEST 5: Gap Analysis Flags
-    # ========================================================================
-    print("\n[TEST 5] Gap Analysis Flags")
-    print("-" * 40)
-    
-    merged_df = apply_gap_flags(merged_df)
-    
-    critical_gaps = merged_df['CriticalGap'].sum()
-    excess_production = merged_df['ExcessProduction'].sum()
-    mould_alerts = merged_df['MouldAlert'].sum()
-    
-    print(f"✓ Gap flags applied")
-    print(f"  - Critical Gaps: {critical_gaps}")
-    print(f"  - Excess Production: {excess_production}")
-    print(f"  - Mould Alerts: {mould_alerts}")
-    
-    if critical_gaps > 0:
-        print(f"\nCritical Gap Examples:")
-        gaps = merged_df[merged_df['CriticalGap']][['SKUCode', 'Rank_ConsolidatedPriorityScore', 'MachineCount']].head(5)
-        print(gaps.to_string(index=False))
-    
+
     # ========================================================================
     # SUMMARY
     # ========================================================================
@@ -122,9 +137,8 @@ def test_stage2_pipeline():
     print("TEST SUMMARY")
     print("=" * 80)
     print("✓ All tests passed successfully!")
-    print(f"\nFinal Dataset Shape: {merged_df.shape}")
-    print(f"Columns: {len(merged_df.columns)}")
-    print("\nStage 2 pipeline is ready for production use.")
+    print(f"\nFinal Dataset Shape: {final_df.shape}")
+    print("\nStage 2 (Frontend Integration) pipeline is ready for production use.")
     print("=" * 80)
 
 
