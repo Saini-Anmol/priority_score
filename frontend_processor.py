@@ -244,6 +244,9 @@ def _build_manual_rows(
     rows["CPT_Requirement"]    = manual_df["Quantity"]
     rows["Requirement"]        = manual_df["Quantity"]
 
+    # Change 2: Manual SKUs always show 100% penetration (they are actively demanded)
+    rows["Penetration"]        = 100.0
+
     rows["Source"] = "Manual"
 
     # Alias for downstream consumers
@@ -283,7 +286,7 @@ def process_frontend_override(stage1_df: pd.DataFrame, date_str: str) -> pd.Data
         df["StrategicPriorityScore"] = df.get(
             "ConsolidatedPriorityScore", pd.Series(0.0, index=df.index))
         df = df.sort_values("StrategicPriorityScore", ascending=False).reset_index(drop=True)
-        df["Final Rank"] = df.index + 1
+        df["Rank_ConsolidatedPriorityScore"] = df.index + 1
         return _select_output_columns(df)
 
     # ── Step 1: Load manual data ─────────────────────────────────────────────
@@ -333,11 +336,26 @@ def process_frontend_override(stage1_df: pd.DataFrame, date_str: str) -> pd.Data
     manual_rows  = _build_manual_rows(manual_df, stage1_df, vector_req_lookup)
     n_manual     = len(manual_rows)
 
-    superseded   = auto_df["SKUCode"].isin(manual_skus)
+    # Change 3: Only supersede an automated row when the manual CPT demand differs
+    # from the Vector demand.  If both are the same quantity, keep BOTH rows
+    # (one Automated, one Manual) — they represent the same SKU from two sources.
+    skus_to_supersede = set()
+    for _, mrow in manual_df.iterrows():
+        sku       = mrow["SKUCode"]
+        vec_req   = vector_req_lookup.get(sku, 0)
+        cpt_req   = float(mrow["Quantity"])
+        if vec_req != cpt_req:          # different demand → manual takes precedence
+            skus_to_supersede.add(sku)
+        # same demand → keep both rows
+
+    superseded   = auto_df["SKUCode"].isin(skus_to_supersede)
     n_superseded = superseded.sum()
     auto_df      = auto_df[~superseded].copy()
     if n_superseded > 0:
         print(f"[STAGE 2] Removed {n_superseded} automated row(s) superseded by manual entries")
+    n_kept_both = len(manual_skus) - n_superseded
+    if n_kept_both > 0:
+        print(f"[STAGE 2] Kept {n_kept_both} SKU(s) as both Automated + Manual (same demand qty)")
 
     auto_df["Source"]             = "Automated"
     auto_df["Vector_Requirement"] = auto_df[req_col] if req_col in auto_df.columns else 0
@@ -369,12 +387,13 @@ def process_frontend_override(stage1_df: pd.DataFrame, date_str: str) -> pd.Data
         if col in hybrid_df.columns:
             hybrid_df[col] = hybrid_df[col].fillna('')
 
-    # ── Step 6: Final Rank ───────────────────────────────────────────────────
+    # ── Step 6: Final Rank → stored in Rank_ConsolidatedPriorityScore ─────────
     # Sort descending: HP=1 manual first, HP=0 manual next, automated last.
+    # Change 1: Use Rank_ConsolidatedPriorityScore as the rank column (no Final Rank).
     hybrid_df = hybrid_df.sort_values(
         "StrategicPriorityScore", ascending=False
     ).reset_index(drop=True)
-    hybrid_df["Final Rank"] = hybrid_df.index + 1
+    hybrid_df["Rank_ConsolidatedPriorityScore"] = hybrid_df.index + 1
 
     print(f"[STAGE 2] Frontend override complete:")
     print(f"  - Manual entries  : {n_manual}")
@@ -387,8 +406,8 @@ def process_frontend_override(stage1_df: pd.DataFrame, date_str: str) -> pd.Data
 def _select_output_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Select and order Stage 2 output columns."""
     output_columns = [
-        # --- Rank ---
-        'Final Rank',
+        # --- Rank (Change 1: Rank_ConsolidatedPriorityScore holds the final rank) ---
+        'Rank_ConsolidatedPriorityScore',
 
         # --- Identification ---
         'SKUCode', 'SKU Description', 'size',
@@ -422,7 +441,6 @@ def _select_output_columns(df: pd.DataFrame) -> pd.DataFrame:
         'ASP', 'Cure Time', 'price_priority',
 
         # --- Scoring Details ---
-        'PriorityScore',
-        'ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore',
+        'PriorityScore', 'ConsolidatedPriorityScore',
     ]
     return df[[c for c in output_columns if c in df.columns]]
