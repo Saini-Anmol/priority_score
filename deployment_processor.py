@@ -1,11 +1,32 @@
 # deployment_processor.py
-# Stage 2: Machine Deployment Analysis Processing Engine
+# Stage 3: Machine Deployment Analysis Processing Engine
+#
+# This module is self-contained — it does NOT import from config_stage2
+# (which is Stage 2's frontend config). All deployment constants are
+# defined locally below and can be tuned here directly.
 
 import pandas as pd
 import numpy as np
 import os
 from datetime import datetime
-import config_stage2
+
+# ---------------------------------------------------------------------------
+# DEPLOYMENT CONSTANTS  (Stage 3 — mould / machine analysis)
+# ---------------------------------------------------------------------------
+BASE_DATA_PATH     = "./data"
+MOULD_REPORT_PATH  = os.path.join(BASE_DATA_PATH, "Vectordata", "Daily Mould Report")
+
+MOULD_LIFE_THRESHOLD   = 0.9    # Alert when avg mould health exceeds this fraction
+MACHINE_COUNT_PENALTY  = 0.05  # Priority reduction per running machine
+CRITICAL_GAP_RANK      = 50    # Top-N rank threshold for Critical Gap flag
+EXCESS_PRODUCTION_RANK = 200   # Below-N rank threshold for Excess Production flag
+EXCESS_MACHINE_COUNT   = 2     # Min machines to trigger Excess Production flag
+
+# Ghost SKU defaults (running on machines but absent from Vector demand)
+GHOST_SKU_REQUIREMENT = 0
+GHOST_SKU_PENETRATION = 0
+GHOST_SKU_MARKET      = "RE"
+GHOST_SKU_CURE_TIME   = 20.0
 
 def clean_mould_report(date_str):
     """
@@ -19,7 +40,7 @@ def clean_mould_report(date_str):
     """
     # Construct the file path
     # Format: DDMMYYYY MouldDetails.csv
-    file_path = os.path.join(config_stage2.MOULD_REPORT_PATH, f"{date_str} MouldDetails.csv")
+    file_path = os.path.join(MOULD_REPORT_PATH, f"{date_str} MouldDetails.csv")
     
     if not os.path.exists(file_path):
         print(f"Warning: Mould report not found for {date_str}")
@@ -92,11 +113,11 @@ def _build_ghost_sku_rows(mould_df: pd.DataFrame, demand_df: pd.DataFrame) -> pd
     ghost_rows['SKUCode']                    = ghost_mould['SKUCode'].values
     ghost_rows['size']                       = pd.to_numeric(
         ghost_mould['SKUCode'].str[8:10], errors='coerce').fillna(0).astype('Int64').values
-    ghost_rows['Market']                     = config_stage2.GHOST_SKU_MARKET
-    ghost_rows['Requirement']                = config_stage2.GHOST_SKU_REQUIREMENT
-    ghost_rows['Vector_Requirement']         = config_stage2.GHOST_SKU_REQUIREMENT
-    ghost_rows['Penetration']                = config_stage2.GHOST_SKU_PENETRATION
-    ghost_rows['Cure Time']                  = config_stage2.GHOST_SKU_CURE_TIME
+    ghost_rows['Market']                     = GHOST_SKU_MARKET
+    ghost_rows['Requirement']                = GHOST_SKU_REQUIREMENT
+    ghost_rows['Vector_Requirement']         = GHOST_SKU_REQUIREMENT
+    ghost_rows['Penetration']                = GHOST_SKU_PENETRATION
+    ghost_rows['Cure Time']                  = GHOST_SKU_CURE_TIME
     ghost_rows['MachineCount']               = ghost_mould['MachineCount'].values
     ghost_rows['AvgMouldHealth']             = ghost_mould['AvgMouldHealth'].values
     ghost_rows['ConsolidatedPriorityScore']  = ghost_score
@@ -160,7 +181,7 @@ def calculate_proxy_penetration(df):
     """
     # Calculate the adjustment factor
     # More machines = lower urgency (already in production)
-    penalty_factor = 1 - (df['MachineCount'] * config_stage2.MACHINE_COUNT_PENALTY)
+    penalty_factor = 1 - (df['MachineCount'] * MACHINE_COUNT_PENALTY)
     
     # Ensure penalty doesn't go negative
     penalty_factor = penalty_factor.clip(lower=0)
@@ -194,18 +215,18 @@ def apply_gap_flags(df):
     
     # Critical Gap: High-priority SKU with no machines
     df['CriticalGap'] = (
-        (df[rank_col] <= config_stage2.CRITICAL_GAP_RANK) & 
+        (df[rank_col] <= CRITICAL_GAP_RANK) & 
         (df['MachineCount'] == 0)
     )
     
     # Excess Production: Low-priority SKU with many machines
     df['ExcessProduction'] = (
-        (df[rank_col] > config_stage2.EXCESS_PRODUCTION_RANK) & 
-        (df['MachineCount'] > config_stage2.EXCESS_MACHINE_COUNT)
+        (df[rank_col] > EXCESS_PRODUCTION_RANK) & 
+        (df['MachineCount'] > EXCESS_MACHINE_COUNT)
     )
     
     # Mould Alert: Mould life exceeds threshold
-    df['MouldAlert'] = df['AvgMouldHealth'] > config_stage2.MOULD_LIFE_THRESHOLD
+    df['MouldAlert'] = df['AvgMouldHealth'] > MOULD_LIFE_THRESHOLD
     
     return df
 
