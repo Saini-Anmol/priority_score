@@ -82,14 +82,21 @@ stage1_rows = [
 # Stage 2 Config Parameters
 # ---------------------------------------------------------------------------
 stage2_rows = [
-    # --- Mould Health ---
-    ("MOULD_LIFE_THRESHOLD",    0.9,  ""),
-    # --- Proxy Penetration ---
-    ("MACHINE_COUNT_PENALTY",   0.05, ""),
-    # --- Gap Analysis ---
-    ("CRITICAL_GAP_RANK",       50,   ""),
-    ("EXCESS_PRODUCTION_RANK",  200,  ""),
-    ("EXCESS_MACHINE_COUNT",    2,    ""),
+    # --- Weighted Scoring: weights must sum to 1.0 ---
+    # These control how Market urgency, Quantity, and Target Date urgency
+    # each contribute to the manual entry's weighted_score.
+    ("MANUAL_W_MARKET",       0.30, ""),  # Weight for market urgency factor
+    ("MANUAL_W_QTY",          0.40, ""),  # Weight for quantity factor (higher qty = more urgent)
+    ("MANUAL_W_TARGET_DATE",  0.30, ""),  # Weight for target date urgency (closer date = more urgent)
+
+    # --- Market Score Mapping (higher numeric = more urgent) ---
+    # These are min-max normalised before combining with qty and date factors.
+    ("MANUAL_MARKET_OE",      4,    ""),
+    ("MANUAL_MARKET_OE10",    4,    ""),
+    ("MANUAL_MARKET_ST",      3,    ""),
+    ("MANUAL_MARKET_EXP",     2,    ""),
+    ("MANUAL_MARKET_OTR",     2,    ""),
+    ("MANUAL_MARKET_RE",      1,    ""),
 ]
 
 # ---------------------------------------------------------------------------
@@ -112,4 +119,6 @@ print("\nSheets created:")
 print(f"  • Stage1_Config  — {len(df_stage1)} parameters")
 print(f"  • Stage2_Config  — {len(df_stage2)} parameters")
 print("\nTo customise a value, enter it in the 'User_Input' column.")
-print("Leave 'User_Input' blank to use the Default_Value.")
+print("\nStage 2 Config guide:")
+print("  • MANUAL_W_MARKET + MANUAL_W_QTY + MANUAL_W_TARGET_DATE must sum to 1.0")
+print("  • MANUAL_MARKET_* values control relative market urgency (higher = more urgent)")
