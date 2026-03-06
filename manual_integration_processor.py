@@ -258,8 +258,8 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
         auto_df["_pair"] = list(zip(auto_df["SKUCode"], auto_df["Market"]))
         vector_req_lookup = (
             auto_df[auto_df["_pair"].isin(manual_sku_mkt_pairs)]
-            .drop_duplicates(subset=["SKUCode", "Market"])
-            .set_index(["SKUCode", "Market"])[req_col]
+            .groupby(["SKUCode", "Market"])[req_col]
+            .sum()                             # sum all location rows for same SKU+Market
             .to_dict()
         )
         auto_df.drop(columns=["_pair"], inplace=True)

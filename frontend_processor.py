@@ -347,8 +347,8 @@ def process_frontend_override(stage1_df: pd.DataFrame, date_str: str) -> pd.Data
         auto_df["_pair"] = sku_mkt_mask
         vector_req_lookup = (
             auto_df[auto_df["_pair"].isin(manual_sku_mkt_pairs)]
-            .drop_duplicates(subset=["SKUCode", "Market"])
-            .set_index(["SKUCode", "Market"])[req_col]
+            .groupby(["SKUCode", "Market"])[req_col]
+            .sum()                             # sum all location rows for same SKU+Market
             .to_dict()
         )
         auto_df.drop(columns=["_pair"], inplace=True)
