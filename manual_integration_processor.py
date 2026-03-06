@@ -139,9 +139,12 @@ def _build_manual_rows(
     so they can be concatenated vertically without issues.
 
     Multi-Source Transparency:
-      Vector_Requirement = what automated demand said for this SKU (before override)
+      Vector_Requirement = what automated demand said for this SKU+Market (before override)
       CPT_Requirement    = what the CPT (manual frontend) specified — takes precedence
       Requirement        = CPT_Requirement (used for all downstream calculations)
+
+    vector_req_lookup is now keyed by (SKUCode, Market) tuples to prevent
+    cross-market contamination (e.g. Govt market entry must not get RE/OE quantity).
     """
     # Attach mould metrics first
     manual_df = _attach_mould_metrics(manual_df, stage2_df)
@@ -161,8 +164,12 @@ def _build_manual_rows(
     manual_rows["ManualRank"]          = manual_df["ManualRank"]
 
     # --- Multi-Source Requirement Transparency ---
-    # Vector_Requirement: what Stage 1/2 calculated for this SKU (0 if it had no demand)
-    manual_rows["Vector_Requirement"]  = manual_df["SKUCode"].map(vector_req_lookup).fillna(0)
+    # Vector_Requirement: looked up by (SKUCode, Market) — 0 if no same-market
+    # automated row exists (e.g. Govt market has no vector data)
+    manual_rows["Vector_Requirement"] = [
+        vector_req_lookup.get((sku, mkt), 0)
+        for sku, mkt in zip(manual_df["SKUCode"], manual_df["Market"].astype(str).str.strip())
+    ]
     # CPT_Requirement: the manager's override value — absolute precedence
     manual_rows["CPT_Requirement"]     = manual_df["Quantity"]
     # Requirement used for final calculations = CPT value
@@ -236,30 +243,41 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
     manual_df = _compute_super_boost_score(manual_df)
 
     # ---- Step 3a: Capture Vector_Requirement BEFORE removing superseded rows ----
-    # This preserves what Stage 1/2 calculated for each SKU so we can show it
-    # side-by-side with the CPT override in the final report.
-    manual_skus = set(manual_df["SKUCode"].str.strip())
+    # KEY FIX: Use (SKUCode, Market) as composite key so a Govt-market manual entry
+    # does not inherit the vector quantity from an RE/OE row of the same SKU code.
     auto_df = stage2_df.copy()
     auto_df["SKUCode"] = auto_df["SKUCode"].astype(str).str.strip()
+    auto_df["Market"]  = auto_df["Market"].astype(str).str.strip()
 
     req_col = "Requirement"  # Stage 2 output column holding the automated requirement
     vector_req_lookup: dict = {}
     if req_col in auto_df.columns:
+        manual_sku_mkt_pairs = set(
+            zip(manual_df["SKUCode"].str.strip(), manual_df["Market"].astype(str).str.strip())
+        )
+        auto_df["_pair"] = list(zip(auto_df["SKUCode"], auto_df["Market"]))
         vector_req_lookup = (
-            auto_df[auto_df["SKUCode"].isin(manual_skus)]
-            .drop_duplicates("SKUCode")
-            .set_index("SKUCode")[req_col]
+            auto_df[auto_df["_pair"].isin(manual_sku_mkt_pairs)]
+            .drop_duplicates(subset=["SKUCode", "Market"])
+            .set_index(["SKUCode", "Market"])[req_col]
             .to_dict()
         )
+        auto_df.drop(columns=["_pair"], inplace=True)
 
     # ---- Step 3b: Build column-aligned manual rows (with both requirement cols) ----
     manual_rows = _build_manual_rows(manual_df, stage2_df, vector_req_lookup)
     n_manual = len(manual_rows)
 
     # ---- Step 4: Remove automated rows superseded by manual entries ----
-    superseded   = auto_df["SKUCode"].isin(manual_skus)
-    n_superseded = superseded.sum()
-    auto_df      = auto_df[~superseded].copy()
+    # Match on (SKUCode, Market) so that a Govt-market manual entry does NOT remove
+    # RE/OE automated rows for the same SKU code.
+    manual_sku_mkt_pairs = set(
+        zip(manual_df["SKUCode"].str.strip(), manual_df["Market"].astype(str).str.strip())
+    )
+    auto_df["_pair"] = list(zip(auto_df["SKUCode"], auto_df["Market"]))
+    superseded       = auto_df["_pair"].isin(manual_sku_mkt_pairs)
+    n_superseded     = superseded.sum()
+    auto_df          = auto_df[~superseded].drop(columns=["_pair"]).copy()
 
     if n_superseded > 0:
         print(f"[STAGE 3] Removed {n_superseded} automated row(s) superseded by manual entries")
