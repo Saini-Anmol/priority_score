@@ -1,38 +1,44 @@
 # manual_integration_processor.py
 # Stage 3: Manual Strategic Override — Hybrid Synthesis Engine
 #
-# Reads ./data/manual_frontend_demand.xlsx and injects those SKUs at the
-# absolute top of the production ranking, above every automated entry.
-# This file does NOT import or modify any Stage 1 / Stage 2 source files.
+# Reads ./data/manual_frontend_demand.xlsx and scores manually-entered SKUs
+# using the SAME principled 4-step weighted scoring pipeline as Stage 2
+# (frontend_processor.py), guaranteeing full consistency between the two stages.
+#
+# Scoring guarantee (final output order):
+#   1st  →  Manual SKUs with HighestPriority = 1  (ordered by ConsolidationPriorityScore desc)
+#   2nd  →  Manual SKUs with HighestPriority = 0  (ordered by ConsolidationPriorityScore desc)
+#   3rd  →  Automated SKUs                         (ordered by ConsolidatedPriorityScore)
+#
+# Weights and market scores are shared via config_stage2 for full Stage 2/3 consistency.
+# This file does NOT import or modify any Stage 1 source files.
 
 import os
+from datetime import datetime
 import pandas as pd
 import numpy as np
+import config_stage2
 
 # ---------------------------------------------------------------------------
 # CONSTANTS
 # ---------------------------------------------------------------------------
 MANUAL_INPUT_FILE = "./data/manual_frontend_demand.xlsx"
-
-# The automated pipeline produces ConsolidatedPriorityScore in [0, 1].
-# We assign manual entries a score of BOOST_BASE + (Highest_Priority * BOOST_MULTIPLIER)
-# so they always sit 10× above the theoretical maximum automated score.
-BOOST_BASE              = 10.0  # Floor score for any manual entry
-BOOST_MULTIPLIER        = 1.0   # Extra score for entries flagged as "Highest Priority"
-
+_TODAY = datetime.now().date()
 
 
 # ---------------------------------------------------------------------------
-# INTERNAL HELPERS
+# INTERNAL HELPERS  (mirrors frontend_processor.py logic exactly)
 # ---------------------------------------------------------------------------
 
 def _load_manual_data() -> pd.DataFrame:
     """
     Load and validate the manual frontend demand Excel file.
 
-    Expected columns (case-insensitive strip):
-        SKU Code | SKU Description | Market | Quantity | Highest Priority
-    Returns a cleaned DataFrame with standardised column names.
+    Expected columns (whitespace-stripped):
+        SKU Code | SKU Description | Market | Quantity | Target Date | Highest Priority
+
+    'Target Date' is optional — defaults to today if absent.
+    Returns a cleaned DataFrame with standardised internal column names.
     """
     if not os.path.exists(MANUAL_INPUT_FILE):
         raise FileNotFoundError(
@@ -41,67 +47,160 @@ def _load_manual_data() -> pd.DataFrame:
         )
 
     df = pd.read_excel(MANUAL_INPUT_FILE)
-
-    # Normalise column names (strip whitespace)
     df.columns = df.columns.str.strip()
 
-    # Rename to internal standard names
     rename_map = {
-        "SKU Code":        "SKUCode",
-        "SKU Description": "SKU Description",   # keep as-is
-        "Market":          "Market",
-        "Quantity":        "Quantity",
-        "Highest Priority":"HighestPriority",
+        "SKU Code":         "SKUCode",
+        "SKU Description":  "SKU Description",
+        "Market":           "Market",
+        "Quantity":         "Quantity",
+        "Target Date":      "Target Date",
+        "Highest Priority": "HighestPriority",
     }
     df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
 
-    # Ensure required columns exist
     required = ["SKUCode", "Quantity", "Market", "HighestPriority"]
-    missing = [c for c in required if c not in df.columns]
+    missing  = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"Manual demand file is missing required columns: {missing}")
 
-    # Type enforcement
     df["SKUCode"]         = df["SKUCode"].astype(str).str.strip()
     df["Market"]          = df["Market"].astype(str).str.strip()
     df["Quantity"]        = pd.to_numeric(df["Quantity"], errors="coerce").fillna(0)
     df["HighestPriority"] = pd.to_numeric(df["HighestPriority"], errors="coerce").fillna(0).astype(int)
 
-    # Drop rows with no SKUCode
-    df = df[df["SKUCode"].str.len() > 0].copy()
+    if "Target Date" in df.columns:
+        df["Target Date"] = pd.to_datetime(df["Target Date"], errors="coerce").dt.date.fillna(_TODAY)
+    else:
+        df["Target Date"] = _TODAY
 
-    return df
+    return df[df["SKUCode"].str.len() > 0].copy()
 
 
-def _extract_size(sku_series: pd.Series) -> pd.array:
-    """
-    Extract the rim size from SKUCode.
-    Matches the exact logic in demand_processor.py:
-        size = characters at index [8:10]  (9th and 10th characters)
-    """
+def _extract_size(sku_series: pd.Series):
+    """Extract rim size from SKUCode[8:10], matching demand_processor.py logic."""
     return pd.to_numeric(sku_series.str[8:10], errors="coerce").fillna(0).astype("Int64")
 
 
-def _compute_super_boost_score(df: pd.DataFrame) -> pd.DataFrame:
+def _minmax(series: pd.Series) -> pd.Series:
+    """Min-max normalization. Returns 1.0 for all rows if the range is zero."""
+    lo, hi = series.min(), series.max()
+    if hi == lo:
+        return pd.Series(1.0, index=series.index)
+    return (series - lo) / (hi - lo)
+
+
+def _compute_weighted_score(df: pd.DataFrame, max_auto: float) -> pd.DataFrame:
     """
-    Assign a ManualPriorityScore that is guaranteed to exceed any automated score.
+    Four-step manual scoring pipeline — identical to Stage 2 (frontend_processor.py).
 
-    Formula:
-        ManualPriorityScore = BOOST_BASE + (HighestPriority × BOOST_MULTIPLIER)
+    Step 1 — weighted_score
+        Weighted sum of min-max normalised Market, Quantity, Target Date.
+        Weights: W_MARKET, W_QTY, W_TARGET_DATE from config_stage2 (must sum to 1).
+        Result range: [0, 1].
 
-    Ranking within the manual block:
-        1. ManualPriorityScore descending  (Highest Priority = 1 → score 11.0 comes first)
-        2. Quantity descending             (tiebreaker: larger requirement is more urgent)
+    Step 2 — Identify HP=1 sub-group and pre-rank.
+        Among HighestPriority=1 rows, rank by weighted_score ASCENDING:
+            rank 1 = lowest weighted_score (smallest boost later)
+            rank P = highest weighted_score (largest boost later)
+
+    Step 3 — modified_priority_score
+        max_ws = max(weighted_score) across ALL manual rows.
+        For HP=1 rows:
+            modified_priority_score = max_ws * (1 + priority_rank / P)
+            → range: (max_ws, 2 * max_ws]  → always above ALL HP=0 scores ≤ max_ws
+        For HP=0 rows:
+            modified_priority_score = weighted_score   (unchanged)
+
+    Step 4 — ConsolidationPriorityScore  (guarantees all manual > all automated)
+        overall_rank = rank of each manual row by modified_priority_score ASCENDING
+            (rank 1 = lowest, rank N = highest = most urgent)
+        ConsolidationPriorityScore = max_auto * (1 + overall_rank / N)
+            → range: (max_auto, 2 * max_auto]  → all manual above all automated ✓
+
+    Args:
+        df       : cleaned manual DataFrame from _load_manual_data()
+        max_auto : max(ConsolidatedPriorityScore) from Stage 2 automated rows
+
+    Returns:
+        df with columns: weighted_score, modified_priority_score,
+                         ConsolidationPriorityScore, priority_rank, manual_rank
     """
-    df["ManualPriorityScore"] = BOOST_BASE + (df["HighestPriority"] * BOOST_MULTIPLIER)
+    N = len(df)
 
-    # Rank within the manual block only
-    df = df.sort_values(
-        by=["ManualPriorityScore", "Quantity"],
-        ascending=[False, False]
-    ).reset_index(drop=True)
+    # ── Step 1: weighted_score ────────────────────────────────────────────────
+    market_scores = df["Market"].map(config_stage2.MARKET_SCORE).fillna(1).astype(float)
+    norm_market   = _minmax(market_scores)
+    norm_qty      = _minmax(df["Quantity"].astype(float))
 
-    df["ManualRank"] = df.index + 1   # 1-based rank within manual block
+    days_remaining = df["Target Date"].apply(
+        lambda d: max((d - _TODAY).days, 0) if isinstance(d, type(_TODAY)) else 0
+    ).astype(float)
+    norm_date = 1.0 - _minmax(days_remaining)   # invert: closer date = higher score
+
+    df = df.copy()
+    df["weighted_score"] = (
+        config_stage2.W_MARKET      * norm_market +
+        config_stage2.W_QTY         * norm_qty    +
+        config_stage2.W_TARGET_DATE * norm_date
+    ).round(6)
+
+    # ── Step 2 & 3: modified_priority_score ───────────────────────────────────
+    max_ws        = df["weighted_score"].max()
+    priority_mask = df["HighestPriority"] == 1
+    P             = int(priority_mask.sum())
+
+    df["priority_rank"]          = 0
+    df["modified_priority_score"] = df["weighted_score"]   # default for HP=0
+
+    if P > 0:
+        hp1_idx = df.index[priority_mask]
+        df.loc[hp1_idx, "priority_rank"] = (
+            df.loc[hp1_idx, "weighted_score"]
+            .rank(ascending=True, method="first")
+            .astype(int)
+        )
+        df.loc[hp1_idx, "modified_priority_score"] = (
+            max_ws * (1.0 + df.loc[hp1_idx, "priority_rank"] / P)
+        ).round(6)
+
+    # ── Step 4: ConsolidationPriorityScore ────────────────────────────────────
+    # overall_rank: 1 = lowest modified_priority_score, N = highest (most urgent)
+    df["overall_rank"] = (
+        df["modified_priority_score"]
+        .rank(ascending=True, method="first")
+        .astype(int)
+    )
+    df["ConsolidationPriorityScore"] = (
+        max_auto * (1.0 + df["overall_rank"] / N)
+    ).round(6)
+
+    # manual_rank: rank within the manual block, 1 = most urgent
+    df["manual_rank"] = (
+        df["ConsolidationPriorityScore"]
+        .rank(ascending=False, method="first")
+        .astype(int)
+    )
+
+    # Sort by manual_rank for clean display
+    df = df.sort_values("manual_rank", ascending=True).reset_index(drop=True)
+
+    # Logging
+    hp1_df = df[df["HighestPriority"] == 1]
+    hp0_df = df[df["HighestPriority"] == 0]
+    print(f"[STAGE 3] Manual scoring complete:")
+    print(f"  - Total manual rows       : {N}")
+    print(f"  - HighestPriority=1 rows  : {P}")
+    print(f"  - max_ws (step 3 base)    : {max_ws:.6f}")
+    print(f"  - max_auto (step 4 base)  : {max_auto:.6f}")
+    if not hp1_df.empty:
+        print(f"  - HP=1 ConsolidationScore range: "
+              f"[{hp1_df['ConsolidationPriorityScore'].min():.6f}, "
+              f"{hp1_df['ConsolidationPriorityScore'].max():.6f}]")
+    if not hp0_df.empty:
+        print(f"  - HP=0 ConsolidationScore range: "
+              f"[{hp0_df['ConsolidationPriorityScore'].min():.6f}, "
+              f"{hp0_df['ConsolidationPriorityScore'].max():.6f}]")
 
     return df
 
@@ -115,7 +214,6 @@ def _attach_mould_metrics(manual_df: pd.DataFrame, stage2_df: pd.DataFrame) -> p
     available  = [c for c in mould_cols if c in stage2_df.columns]
 
     if len(available) < 3:
-        # Mould data unavailable — fill with zeros
         manual_df["MachineCount"]   = 0
         manual_df["AvgMouldHealth"] = 0.0
         return manual_df
@@ -138,12 +236,7 @@ def _build_manual_rows(
     Construct manual rows that are column-compatible with the Stage 2 DataFrame
     so they can be concatenated vertically without issues.
 
-    Multi-Source Transparency:
-      Vector_Requirement = what automated demand said for this SKU+Market (before override)
-      CPT_Requirement    = what the CPT (manual frontend) specified — takes precedence
-      Requirement        = CPT_Requirement (used for all downstream calculations)
-
-    vector_req_lookup is now keyed by (SKUCode, Market) tuples to prevent
+    vector_req_lookup is keyed by (SKUCode, Market) tuples to prevent
     cross-market contamination (e.g. Govt market entry must not get RE/OE quantity).
     """
     # Attach mould metrics first
@@ -157,25 +250,27 @@ def _build_manual_rows(
     manual_rows["size"]                = _extract_size(manual_df["SKUCode"])
     manual_rows["Market"]              = manual_df["Market"]
 
-    # --- Manual-specific metrics ---
-    manual_rows["Quantity"]            = manual_df["Quantity"]
-    manual_rows["HighestPriority"]     = manual_df["HighestPriority"]
-    manual_rows["ManualPriorityScore"] = manual_df["ManualPriorityScore"]
-    manual_rows["ManualRank"]          = manual_df["ManualRank"]
+    # --- Manual-specific metrics (Stage 2-aligned column names) ---
+    manual_rows["Quantity"]                    = manual_df["Quantity"]
+    manual_rows["Target Date"]                 = manual_df["Target Date"].astype(str)
+    manual_rows["HighestPriority"]             = manual_df["HighestPriority"]
+    manual_rows["weighted_score"]              = manual_df["weighted_score"]
+    manual_rows["modified_priority_score"]     = manual_df["modified_priority_score"]
+    manual_rows["manual_rank"]                 = manual_df["manual_rank"]
+    manual_rows["ConsolidationPriorityScore"]  = manual_df["ConsolidationPriorityScore"]
 
     # --- Multi-Source Requirement Transparency ---
     # Vector_Requirement: looked up by (SKUCode, Market) — 0 if no same-market
-    # automated row exists (e.g. Govt market has no vector data)
+    # automated row exists (e.g. Govt market has no vector data).
+    # Summed across all location rows for that (SKU, Market) pair.
     manual_rows["Vector_Requirement"] = [
         vector_req_lookup.get((sku, mkt), 0)
         for sku, mkt in zip(manual_df["SKUCode"], manual_df["Market"].astype(str).str.strip())
     ]
-    # CPT_Requirement: the manager's override value — absolute precedence
     manual_rows["CPT_Requirement"]     = manual_df["Quantity"]
-    # Requirement used for final calculations = CPT value
     manual_rows["Requirement"]         = manual_df["Quantity"]
 
-    # --- Ghost SKU flag: manual entries are always real demand ---
+    # Ghost SKU flag: manual entries are always real demand
     manual_rows["IsGhostSKU"]          = False
 
     # --- Deployment metrics (from Stage 2 join) ---
@@ -190,14 +285,13 @@ def _build_manual_rows(
     # --- Source tag ---
     manual_rows["Source"]              = "Manual"
 
-    # ProxyRank for manual entries = ManualRank (occupies top N positions)
-    manual_rows["ProxyRank"]           = manual_df["ManualRank"]
+    # ProxyRank for manual entries = manual_rank (occupies top N positions)
+    manual_rows["ProxyRank"]           = manual_df["manual_rank"]
 
-    # ConsolidatedPriorityScore alias (for any downstream consumers)
-    manual_rows["ConsolidatedPriorityScore"] = manual_df["ManualPriorityScore"]
+    # ConsolidatedPriorityScore alias for any downstream consumers
+    manual_rows["ConsolidatedPriorityScore"] = manual_df["ConsolidationPriorityScore"]
 
     return manual_rows
-
 
 
 # ---------------------------------------------------------------------------
@@ -208,48 +302,69 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
     """
     Stage 3 entry point: Hybrid Synthesis.
 
+    Uses the SAME 4-step weighted scoring as Stage 2 for full consistency.
+
     Steps:
         1. Load manual demand Excel.
-        2. Compute Super-Boost priority scores.
-        3. Attach mould metrics from Stage 2.
-        4. Remove any automated rows whose SKUCode appears in the manual list
-           (manual entry takes precedence).
-        5. Offset automated ProxyRanks so they start after the last manual rank.
-        6. Concatenate: manual rows on top, automated rows below.
-        7. Assign a sequential FinalRank column (1, 2, 3 …).
+        2. Compute weighted scores + HighestPriority boost + automated-ceiling lift.
+        3. Capture Vector_Requirement by (SKUCode, Market) before removing superseded rows.
+        4. Build manual rows + tag automated rows.
+        5. Supersede automated rows on (SKUCode, Market) match.
+        6. Concatenate and sort by ConsolidationPriorityScore descending.
+        7. Assign Final Rank.
 
-    Args:
-        stage2_df (pd.DataFrame): Full output from Stage 2 (deployment analysis).
-        date_str  (str):          Date in DDMMYYYY format (for logging).
-
-    Returns:
-        pd.DataFrame: Hybrid DataFrame with manual entries at the top.
+    Final output order guaranteed:
+        HP=1 manual  →  HP=0 manual  →  Automated (all by score desc within group)
     """
     print(f"[STAGE 3] Starting Manual Strategic Override for {date_str}")
 
-    # ---- Step 1: Load & validate manual data ----
+    # ── Helper: automated-only path ──────────────────────────────────────────
+    def _automated_only(df):
+        df = df.copy()
+        df["Source"]           = "Automated"
+        req                    = "Requirement"
+        df["Vector_Requirement"] = df[req] if req in df.columns else 0
+        df["CPT_Requirement"]  = 0
+        df = df.sort_values("ConsolidatedPriorityScore", ascending=False).reset_index(drop=True)
+        df["Final Rank"]       = df.index + 1
+        return _select_output_columns(df)
+
+    # ── Step 1: Load manual data ─────────────────────────────────────────────
     print("[STAGE 3] Loading manual demand file...")
-    manual_df = _load_manual_data()
-    print(f"[STAGE 3] Loaded {len(manual_df)} manual entries")
+    try:
+        manual_df = _load_manual_data()
+        print(f"[STAGE 3] Loaded {len(manual_df)} manual entries")
+    except FileNotFoundError as e:
+        print(f"[STAGE 3] Warning: {e}")
+        print("[STAGE 3] No manual file — returning Stage 2 output (automated only).")
+        return _automated_only(stage2_df)
 
     if manual_df.empty:
-        print("[STAGE 3] No manual entries found. Returning Stage 2 output unchanged.")
-        stage2_df["Source"] = "Automated"
-        stage2_df["FinalRank"] = range(1, len(stage2_df) + 1)
-        return stage2_df
+        print("[STAGE 3] No manual entries — returning Stage 2 output (automated only).")
+        return _automated_only(stage2_df)
 
-    # ---- Step 2: Compute Super-Boost scores & rank within manual block ----
-    print("[STAGE 3] Computing Super-Boost priority scores...")
-    manual_df = _compute_super_boost_score(manual_df)
+    # ── Step 2: Compute weighted scores ──────────────────────────────────────
+    print("[STAGE 3] Computing weighted priority scores...")
 
-    # ---- Step 3a: Capture Vector_Requirement BEFORE removing superseded rows ----
-    # KEY FIX: Use (SKUCode, Market) as composite key so a Govt-market manual entry
-    # does not inherit the vector quantity from an RE/OE row of the same SKU code.
+    # max_auto: ceiling that all manual scores must exceed
+    score_col = "ConsolidatedPriorityScore"
+    max_auto  = float(
+        pd.to_numeric(stage2_df[score_col], errors="coerce").max()
+        if score_col in stage2_df.columns else 1.0
+    )
+    if max_auto <= 0:
+        max_auto = 1.0   # safety guard
+
+    manual_df = _compute_weighted_score(manual_df, max_auto)
+
+    # ── Step 3: Capture Vector_Requirement before removing superseded rows ───
+    # KEY: (SKUCode, Market) composite key — Govt-market entries get 0,
+    # not a quantity borrowed from RE/OE rows for the same SKU code.
     auto_df = stage2_df.copy()
     auto_df["SKUCode"] = auto_df["SKUCode"].astype(str).str.strip()
     auto_df["Market"]  = auto_df["Market"].astype(str).str.strip()
 
-    req_col = "Requirement"  # Stage 2 output column holding the automated requirement
+    req_col = "Requirement"
     vector_req_lookup: dict = {}
     if req_col in auto_df.columns:
         manual_sku_mkt_pairs = set(
@@ -264,90 +379,80 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
         )
         auto_df.drop(columns=["_pair"], inplace=True)
 
-    # ---- Step 3b: Build column-aligned manual rows (with both requirement cols) ----
+    # ── Step 4: Build manual rows + tag automated rows ───────────────────────
     manual_rows = _build_manual_rows(manual_df, stage2_df, vector_req_lookup)
-    n_manual = len(manual_rows)
+    n_manual    = len(manual_rows)
 
-    # ---- Step 4: Remove automated rows superseded by manual entries ----
-    # Match on (SKUCode, Market) so that a Govt-market manual entry does NOT remove
-    # RE/OE automated rows for the same SKU code.
-    manual_sku_mkt_pairs = set(
+    # ── Step 5: Supersede automated rows by (SKUCode, Market) match ─────────
+    # A Govt-market manual entry does NOT remove RE/OE automated rows
+    # for the same SKU code.
+    pairs_to_supersede = set(
         zip(manual_df["SKUCode"].str.strip(), manual_df["Market"].astype(str).str.strip())
     )
     auto_df["_pair"] = list(zip(auto_df["SKUCode"], auto_df["Market"]))
-    superseded       = auto_df["_pair"].isin(manual_sku_mkt_pairs)
-    n_superseded     = superseded.sum()
-    auto_df          = auto_df[~superseded].drop(columns=["_pair"]).copy()
+    superseded_mask  = auto_df["_pair"].isin(pairs_to_supersede)
+    n_superseded     = superseded_mask.sum()
+    auto_df          = auto_df[~superseded_mask].drop(columns=["_pair"]).copy()
 
     if n_superseded > 0:
         print(f"[STAGE 3] Removed {n_superseded} automated row(s) superseded by manual entries")
 
-    # ---- Step 5: Tag automated rows, add dual-source cols & offset ProxyRank ----
-    auto_df["Source"] = "Automated"
-    # For automated rows: Vector demand IS the requirement; no CPT override
-    auto_df["Vector_Requirement"] = auto_df[req_col] if req_col in auto_df.columns else 0
-    auto_df["CPT_Requirement"]    = 0
-    # Ensure IsGhostSKU propagates (set to False if absent)
+    # Tag automated rows
+    auto_df["Source"]                     = "Automated"
+    auto_df["Vector_Requirement"]         = auto_df[req_col] if req_col in auto_df.columns else 0
+    auto_df["CPT_Requirement"]            = 0
+    auto_df["ConsolidationPriorityScore"] = pd.to_numeric(
+        auto_df.get(score_col, pd.Series(0.0, index=auto_df.index)), errors="coerce"
+    ).fillna(0)
+
     if "IsGhostSKU" not in auto_df.columns:
         auto_df["IsGhostSKU"] = False
+
     # Re-rank automated rows starting after the last manual rank
     auto_df = auto_df.sort_values("ProxyRank", ascending=True).reset_index(drop=True)
     auto_df["ProxyRank"] = auto_df.index + n_manual + 1
 
-    # ---- Step 6: Vertical merge — manual on top ----
+    # ── Step 6: Vertical merge ───────────────────────────────────────────────
     hybrid_df = pd.concat([manual_rows, auto_df], ignore_index=True, sort=False)
 
-    # ---- Step 6b: DATA IMPUTATION — fill all missing numeric values with 0 ----
-    # Ensures every cell is populated across Manual / Automated / Ghost rows.
-    # Zero is the correct sentinel for missing demand/inventory data.
+    # ── Data imputation ───────────────────────────────────────────────────────
     _NUMERIC_FILL_ZERO = [
         'Norm ', 'Virtual Norm', 'Adjusted_Target', 'Stock',
         'Requirement', 'Updated_Requirement', 'Vector_Requirement', 'CPT_Requirement',
         'Penetration', 'NormPenetration', 'NormRequirement',
         'PriorityScore_Inventory', 'NormInventoryScore',
         'HistoryPenetrationScore', 'NormHistoryPenetrationScore',
-        'PriorityScore',
-        'ConsolidatedPriorityScore',
+        'PriorityScore', 'ConsolidatedPriorityScore', 'ConsolidationPriorityScore',
         'ProxyPenetration', 'ProxyRank',
         'ASP', 'daily_cure', 'rev_pot', 'price_priority',
-        'MarketWeight', 'TopSKUFlag', 'ManualPriorityScore',
-        'HighestPriority', 'ManualRank',
+        'MarketWeight', 'TopSKUFlag', 'HighestPriority', 'manual_rank',
+        'weighted_score', 'modified_priority_score',
     ]
     for col in _NUMERIC_FILL_ZERO:
         if col in hybrid_df.columns:
             hybrid_df[col] = pd.to_numeric(hybrid_df[col], errors='coerce').fillna(0)
 
-    # String columns: fill NaN with empty string so no cell shows 'NaN'
-    _STRING_FILL_EMPTY = ['SKU Description', 'Source']
-    for col in _STRING_FILL_EMPTY:
+    for col in ['SKU Description', 'Source', 'Target Date']:
         if col in hybrid_df.columns:
             hybrid_df[col] = hybrid_df[col].fillna('')
 
-    # ---- Step 7: Unified StrategicPriorityScore (fully populated for every row) ----
-    # Manual     → ManualPriorityScore   (super-boost value, e.g. 10–11)
-    # Automated  → ConsolidatedPriorityScore (single configurable Demand+Inventory+Price score)
-    hybrid_df["StrategicPriorityScore"] = np.where(
-        hybrid_df["Source"] == "Manual",
-        hybrid_df["ManualPriorityScore"],
-        hybrid_df.get("ConsolidatedPriorityScore", pd.Series(0.0, index=hybrid_df.index))
-    )
-
-    # ---- Step 8: Final Rank — sort by StrategicPriorityScore then stamp rank ----
-    # Must sort HERE so that automated rows with high scores are not buried by
-    # whatever order the Stage-2 ProxyRank happened to leave them in.
-    # Manual entries (score 10–11) always float above automated entries (score ≤ 1).
+    # ── Step 7: Final Rank — sort by ConsolidationPriorityScore descending ───
+    # HP=1 manual first → HP=0 manual → Automated (same guarantee as Stage 2).
     hybrid_df = hybrid_df.sort_values(
-        "StrategicPriorityScore", ascending=False
+        "ConsolidationPriorityScore", ascending=False
     ).reset_index(drop=True)
     hybrid_df["Final Rank"] = hybrid_df.index + 1
 
-    # Summary
     print(f"[STAGE 3] Override complete:")
     print(f"  - Manual entries at top : {n_manual}")
     print(f"  - Automated entries     : {len(auto_df)}")
     print(f"  - Total rows in output  : {len(hybrid_df)}")
 
-    # SELECT & ORDER OUTPUT COLUMNS — logical left-to-right narrative
+    return _select_output_columns(hybrid_df)
+
+
+def _select_output_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Select and order Stage 3 output columns."""
     output_columns = [
         # --- Group 0: Primary Production Sequence ---
         'Final Rank',
@@ -355,41 +460,43 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
         # --- Group 1: Identification ---
         'SKUCode', 'SKU Description', 'size',
 
-        # --- Group 2: Source & Override Tag (manual-specific) ---
-        'Source', 'HighestPriority', 'ManualPriorityScore', 'ManualRank',
+        # --- Group 2: Source & Override Tag ---
+        'Source', 'HighestPriority', 'Target Date', 'Quantity',
 
-        # --- Group 3: Unified Strategic Score ---
-        'StrategicPriorityScore',
+        # --- Group 3: Manual Scoring Breakdown (Stage 2-consistent) ---
+        'weighted_score', 'modified_priority_score', 'manual_rank',
 
-        # --- Group 4: Targets ---
+        # --- Group 4: Unified Consolidation Score ---
+        'ConsolidationPriorityScore',
+
+        # --- Group 5: Targets ---
         'Market', 'Norm ', 'Virtual Norm', 'Adjusted_Target',
 
-        # --- Group 5: Demand Signals (Data Story: Vector Need → CPT Override → Final Gap) ---
-        'Stock', 'Vector_Requirement', 'CPT_Requirement', 'Requirement', 'Updated_Requirement', 'Penetration',
+        # --- Group 6: Demand Signals ---
+        'Stock', 'Vector_Requirement', 'CPT_Requirement',
+        'Requirement', 'Updated_Requirement', 'Penetration',
         'NormPenetration', 'NormRequirement',
 
-        # --- Group 6: SKU Attributes ---
+        # --- Group 7: SKU Attributes ---
         'TopSKUFlag', 'MarketWeight', 'priority',
 
-        # --- Group 7: Inventory Signals ---
+        # --- Group 8: Inventory Signals ---
         'PriorityScore_Inventory', 'NormInventoryScore',
 
-        # --- Group 7b: History Penetration ---
+        # --- Group 8b: History Penetration ---
         'HistoryPenetrationScore', 'NormHistoryPenetrationScore',
 
-        # --- Group 8: Deployment Metrics & Gap Flags ---
+        # --- Group 9: Deployment Metrics & Gap Flags ---
         'MachineCount', 'AvgMouldHealth',
         'ProxyPenetration', 'ProxyRank',
         'CriticalGap', 'ExcessProduction', 'MouldAlert', 'IsGhostSKU',
 
-        # --- Group 9: Revenue & Efficiency ---
+        # --- Group 10: Revenue & Efficiency ---
         'ASP', 'Cure Time', 'daily_cure', 'rev_pot', 'price_priority',
 
-        # --- Group 10: Detailed Scoring Components ---
+        # --- Group 11: Detailed Scoring Components ---
         'PriorityScore',
         'ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore',
     ]
 
-    # Safe selection: only include columns present in the hybrid DataFrame
-    available_cols = [col for col in output_columns if col in hybrid_df.columns]
-    return hybrid_df[available_cols]
+    return df[[c for c in output_columns if c in df.columns]]
