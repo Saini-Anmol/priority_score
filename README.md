@@ -11,8 +11,8 @@ A three-stage manufacturing priority and deployment analysis engine that transfo
 - [Installation](#installation)
 - [Data Directory Layout](#data-directory-layout)
 - [Stage 1: Demand Prioritization](#stage-1-demand-prioritization)
-- [Stage 2: Machine Deployment Analysis](#stage-2-machine-deployment-analysis)
-- [Stage 3: Manual Strategic Override](#stage-3-manual-strategic-override)
+- [Stage 2: Frontend / Manual Integration](#stage-2-frontend--manual-integration)
+- [Stage 3: Manual Strategic Override (Hybrid Synthesis)](#stage-3-manual-strategic-override-hybrid-synthesis)
 - [Key Formulas](#key-formulas)
 - [Column Reference](#column-reference)
 - [Configuration](#configuration)
@@ -25,13 +25,15 @@ A three-stage manufacturing priority and deployment analysis engine that transfo
 
 The system processes daily manufacturing data through three sequential stages:
 
-| Stage                                     | Module                            | Output File                           |
-| ----------------------------------------- | --------------------------------- | ------------------------------------- |
-| **Stage 1** – Demand Prioritization       | `demand_processor.py`             | `combined_data_output.xlsx`           |
-| **Stage 2** – Machine Deployment Analysis | `deployment_processor.py`         | `deployment_analysis_report.xlsx`     |
-| **Stage 3** – Manual Strategic Override   | `manual_integration_processor.py` | `final_hybrid_deployment_report.xlsx` |
+| Stage                                            | Module                            | Output File                              |
+| ------------------------------------------------ | --------------------------------- | ---------------------------------------- |
+| **Stage 1** – Demand Prioritization              | `demand_processor.py`             | `combined_vector_demand_<DDMMYYYY>.xlsx` |
+| **Stage 2** – Frontend / Manual Integration      | `frontend_processor.py`           | `deployment_analysis_report.xlsx`        |
+| **Stage 3** – Manual Strategic Override (Hybrid) | `manual_integration_processor.py` | `final_hybrid_deployment_report.xlsx`    |
 
 Each stage enriches the data further. Stage 3 is the final, actionable production sequence delivered to the plant floor.
+
+> **Design note:** `deployment_processor.py` continues to run as a background component inside Stage 3 to compute mould health metrics (`MachineCount`, `AvgMouldHealth`, `ProxyPenetration`, etc.). It is no longer a standalone Stage 2 output module.
 
 ---
 
@@ -39,20 +41,21 @@ Each stage enriches the data further. Stage 3 is the final, actionable productio
 
 ```
 Vector_Project/
-├── config.py                      # Stage 1 configuration (reads config_input.xlsx)
-├── config_stage2.py               # Stage 2 configuration (reads config_input.xlsx)
-├── demand_processor.py            # Stage 1 processing logic
-├── deployment_processor.py        # Stage 2 processing logic
-├── manual_integration_processor.py# Stage 3 manual override logic
-├── app.py                         # Stage 1 standalone runner
-├── app_stage2.py                  # Stage 1 + 2 integrated runner
-├── app_stage3.py                  # Stage 1 + 2 + 3 integrated runner (full pipeline)
-├── create_config_excel.py         # One-time script to generate config_input.xlsx
-├── config_input.xlsx              # Master configuration file (Excel)
-├── PROCESS_DOCUMENTATION.md      # Detailed process & formula documentation
-├── requirements.txt               # Python dependencies
+├── config.py                       # Stage 1 configuration (reads config_input.xlsx)
+├── config_stage2.py                # Stage 2 / 3 shared scoring configuration
+├── demand_processor.py             # Stage 1 processing logic
+├── frontend_processor.py           # Stage 2 manual integration engine
+├── deployment_processor.py         # Mould/machine analysis (used as Stage 3 input)
+├── manual_integration_processor.py # Stage 3 hybrid synthesis engine
+├── app.py                          # Stage 1 standalone runner
+├── app_stage2.py                   # Stage 1 + 2 integrated runner
+├── app_stage3.py                   # Full pipeline runner (Stage 1 + 2 + 3)
+├── create_config_excel.py          # One-time script to generate config_input.xlsx
+├── config_input.xlsx               # Master configuration file (Excel)
+├── PROCESS_DOCUMENTATION.md        # Detailed process & formula documentation
+├── requirements.txt                # Python dependencies
 ├── .gitignore
-└── data/                          # Data directory (not tracked by git)
+└── data/                           # Data directory (not tracked by git)
 ```
 
 ---
@@ -99,11 +102,11 @@ data/
 │   │   └── Prod_OverAll_BMReport__DD_MM_YYYY.xlsx
 │   ├── BPR/                         # Buffer Penetration Reports
 │   │   └── BufferPenetrationReport__DD-MM-YYYY.csv
-│   └── Daily Mould Report/          # Stage 2 mould data
+│   └── Daily Mould Report/          # Stage 3 mould data
 │       └── DDMMYYYY MouldDetails.csv
 ├── DISPATCH1.csv                    # Static dispatch data (ASP source)
 ├── curing_cycletime.csv             # Static curing cycle times per SKU
-└── manual_frontend_demand.xlsx      # Stage 3 manual override input
+└── manual_frontend_demand.xlsx      # Stage 2 & 3 manual override input
 ```
 
 ---
@@ -131,81 +134,155 @@ Stage 1 reads four daily reports and two static files per date to produce a rank
 BOR / BMR  →  Strategic Norm Adjustment (config multipliers)  →  PriorityScore (demand)
 BPR        →  PriorityScore_Inventory
 BOR hist.  →  HistoryPenetrationScore (consecutive black streak, last N days)
-DISPATCH   →  ASP
+DISPATCH   →  ASP  (grouped by Material × Market_Group)
 Curing     →  daily_cure  →  rev_pot  →  price_priority
 
-PriorityScore + NormInventoryScore + price_priority + NormHistoryPenetrationScore  →  ConsolidatedPriorityScore
+PriorityScore + NormInventoryScore + price_priority + NormHistoryPenetrationScore
+    →  ConsolidatedPriorityScore
 ```
 
 ### Output
 
-**File:** `combined_data_output.xlsx` — one sheet per date processed.
+**File:** `combined_vector_demand_<DDMMYYYY>.xlsx` — one sheet per date processed (end date used in filename).
 
 ---
 
-## Stage 2: Machine Deployment Analysis
+## Stage 2: Frontend / Manual Integration
 
-**Runner:** `python app_stage2.py` or `python app_stage3.py`
+**Runner:** `python app_stage2.py` or `python app_stage3.py`  
+**Module:** `frontend_processor.py`
 
-Stage 2 cross-references Stage 1 output with the Daily Mould Report to identify manufacturing gaps and calculate adjusted priorities.
-
-### Input Files (per date)
-
-- All Stage 1 inputs (see above)
-- `DDMMYYYY MouldDetails.csv` — mould health and machine assignment data
-
-### Key Concepts
-
-| Concept               | Meaning                                                   |
-| --------------------- | --------------------------------------------------------- |
-| **Ghost SKU**         | A SKU running on machines but absent from Vector demand   |
-| **Critical Gap**      | High-priority SKU (rank ≤ 50) with zero machines assigned |
-| **Excess Production** | Low-priority SKU (rank > 200) consuming > 2 machines      |
-| **Mould Alert**       | SKU whose average mould health > 90% of target life       |
-
-### Output
-
-**File:** `deployment_analysis_report.xlsx` — Stage 1 columns + deployment metrics.
-
----
-
-## Stage 3: Manual Strategic Override
-
-**Runner:** `python app_stage3.py`
-
-Stage 3 allows production planners to inject manual SKU demands that **always outrank** the automated output. Manual entries are immune to the overstock penalty.
+Stage 2 merges manually-entered CPT (Customer/Planner) demand from `manual_frontend_demand.xlsx` with the Stage 1 automated output. Manual entries are scored using a principled **4-step weighted pipeline** and are guaranteed to outrank all automated SKUs.
 
 ### Manual Input File
 
 **File:** `data/manual_frontend_demand.xlsx`
 
-| Column             | Type         | Description                  |
-| ------------------ | ------------ | ---------------------------- |
-| `SKU Code`         | string       | SKU identifier               |
-| `SKU Description`  | string       | Optional description         |
-| `Market`           | string       | OE / ST / EXP / RE           |
-| `Quantity`         | number       | Required production quantity |
-| `Highest Priority` | int (0 or 1) | 1 = absolute top of queue    |
+| Column             | Type         | Description                                    |
+| ------------------ | ------------ | ---------------------------------------------- |
+| `SKU Code`         | string       | SKU identifier                                 |
+| `SKU Description`  | string       | Optional description                           |
+| `Market`           | string       | OE / OE10 / ST / EXP / OTR / RE                |
+| `Quantity`         | number       | Required production quantity (CPT demand)      |
+| `Target Date`      | date         | When this quantity is needed (defaults: today) |
+| `Highest Priority` | int (0 or 1) | 1 = absolute top of queue                      |
+
+### 4-Step Manual Scoring Pipeline
+
+```
+Step 1 — weighted_score
+    Weighted sum of three min-max normalised inputs:
+        market_score  (from MARKET_SCORE map in config_stage2.py)
+        quantity      (larger qty = more urgent)
+        target_date   (closer date = more urgent, inverted)
+
+    weighted_score = W_MARKET × norm_market
+                   + W_QTY    × norm_qty
+                   + W_DATE   × (1 − norm_days_remaining)
+    Range: [0, 1]
+
+Step 2 — Identify HighestPriority = 1 sub-group
+    Rank HP=1 rows by weighted_score ASCENDING within the HP=1 block.
+    rank 1 = lowest ws (smallest boost); rank P = highest ws (largest boost).
+
+Step 3 — modified_priority_score
+    max_ws = max(weighted_score) across ALL manual rows.
+    For HP=1 rows:
+        modified_priority_score = max_ws × (1 + priority_rank / P)
+        Range: (max_ws, 2 × max_ws]  → always above ALL HP=0 scores
+    For HP=0 rows:
+        modified_priority_score = weighted_score  (unchanged)
+
+Step 4 — ConsolidationPriorityScore  (FINAL STAGE 2 SCORE)
+    overall_rank = rank by modified_priority_score ASCENDING
+                   (rank 1 = lowest, rank N = most urgent)
+    max_auto = max(ConsolidatedPriorityScore) from Stage 1 automated rows
+    ConsolidationPriorityScore = max_auto × (1 + overall_rank / N)
+    Range: (max_auto, 2 × max_auto]  → all manual rows above all automated rows ✓
+```
+
+### Supersede Logic
+
+Manual entries supersede automated rows using a **(SKUCode, Market)** composite key:
+
+- A `Govt`-market manual entry does **not** remove `RE` or `OE` automated rows for the same SKU.
+- If the manual `Quantity` equals the automated `Requirement` for the same (SKU, Market), **both rows are kept** side by side.
+
+### Output Column Structure (A → Z)
+
+| Group                   | Columns                                                                           | Description                          |
+| ----------------------- | --------------------------------------------------------------------------------- | ------------------------------------ |
+| **A** — Rank            | `Rank_ConsolidationPriorityScore`                                                 | Final Stage 2 rank (1 = most urgent) |
+| **B–D** — ID            | `SKUCode`, `SKU Description`, `size`                                              | SKU identity                         |
+| **E–H** — Inputs        | `Source`, `HighestPriority`, `Target Date`, `Quantity`                            | Manual inputs                        |
+| **I–K** — Intermediates | `weighted_score`, `modified_priority_score`, `manual_rank`                        | Scoring steps                        |
+| **L** — Market          | `Market`                                                                          | Market segment                       |
+| **M–O** — Targets       | `Norm`, `Virtual Norm`, `Adjusted_Target`                                         | Production norms                     |
+| **P–V** — Demand        | `Stock`, `Vector_Requirement`, `CPT_Requirement`, `Requirement`, `Penetration`... | Demand signals                       |
+| **W–Y** — Attributes    | `TopSKUFlag`, `MarketWeight`, `priority`                                          | SKU attributes                       |
+| **Z–AA** — Inventory    | `PriorityScore_Inventory`, `NormInventoryScore`                                   | Inventory signals                    |
+| **AB–AC** — History     | `HistoryPenetrationScore`, `NormHistoryPenetrationScore`                          | Black-day streak                     |
+| **AD–AF** — Revenue     | `ASP`, `Cure Time`, `price_priority`                                              | Revenue efficiency                   |
+| **AG** — Stage 1 Score  | `PriorityScore`                                                                   | Raw Stage 1 demand score             |
+| **AH ✅** — Final       | `ConsolidationPriorityScore`                                                      | **Canonical Stage 2 final score**    |
+
+**File:** `deployment_analysis_report.xlsx`
+
+---
+
+## Stage 3: Manual Strategic Override (Hybrid Synthesis)
+
+**Runner:** `python app_stage3.py`  
+**Module:** `manual_integration_processor.py`
+
+Stage 3 uses the **same 4-step weighted pipeline** as Stage 2 to score manual entries, ensuring full consistency. It additionally attaches mould/machine deployment metrics from `deployment_processor.py`.
 
 ### Processing Flow
 
 ```
-Manual entries  →  Super-Boost Score  →  sorted at top
-Stage 2 output  →  automated rows below (ProxyRank offset)
-Both merged     →  StrategicPriorityScore  →  Overstock Penalty  →  Final Rank
+Stage 2 output  →  max_auto = max(ConsolidatedPriorityScore)
+Manual entries  →  4-step weighted scoring (identical to Stage 2)
+                →  ConsolidationPriorityScore > max_auto (guaranteed)
+
+Supersede automated rows by (SKUCode, Market) match
+Attach mould metrics (MachineCount, AvgMouldHealth) to manual rows
+Concat manual + automated  →  sort by ConsolidationPriorityScore DESC
+Final Rank = row index + 1
 ```
 
-### Output
+### Final Output Order (guaranteed)
 
-**File:** `final_hybrid_deployment_report.xlsx` — complete hybrid report with `Final Rank` as the first column.
+```
+1st  →  Manual SKUs with HighestPriority = 1  (ordered by ConsolidationPriorityScore desc)
+2nd  →  Manual SKUs with HighestPriority = 0  (ordered by ConsolidationPriorityScore desc)
+3rd  →  Automated SKUs                         (ordered by ConsolidationPriorityScore desc)
+```
+
+### Output Column Structure (A → AT)
+
+| Group                   | Columns                                                                                                                          | Description                       |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| **A** — Rank            | `Final Rank`                                                                                                                     | Definitive production sequence    |
+| **B–D** — ID            | `SKUCode`, `SKU Description`, `size`                                                                                             | SKU identity                      |
+| **E–H** — Inputs        | `Source`, `HighestPriority`, `Target Date`, `Quantity`                                                                           | Manual inputs                     |
+| **I–K** — Intermediates | `weighted_score`, `modified_priority_score`, `manual_rank`                                                                       | Scoring steps                     |
+| **L** — Market          | `Market`                                                                                                                         | Market segment                    |
+| **M–O** — Targets       | `Norm`, `Virtual Norm`, `Adjusted_Target`                                                                                        | Production norms                  |
+| **P–W** — Demand        | `Stock`, `Vector_Requirement`, `CPT_Requirement`, `Requirement`, `Updated_Requirement`, `Penetration`...                         | Demand signals                    |
+| **X–Z** — Attributes    | `TopSKUFlag`, `MarketWeight`, `priority`                                                                                         | SKU attributes                    |
+| **AA–AB** — Inventory   | `PriorityScore_Inventory`, `NormInventoryScore`                                                                                  | Inventory signals                 |
+| **AC–AD** — History     | `HistoryPenetrationScore`, `NormHistoryPenetrationScore`                                                                         | Black-day streak                  |
+| **AE–AL** — Deployment  | `MachineCount`, `AvgMouldHealth`, `ProxyPenetration`, `ProxyRank`, `CriticalGap`, `ExcessProduction`, `MouldAlert`, `IsGhostSKU` | Stage 3-only                      |
+| **AM–AQ** — Revenue     | `ASP`, `Cure Time`, `daily_cure`, `rev_pot`, `price_priority`                                                                    | Revenue efficiency                |
+| **AR** — Stage 1 Raw    | `PriorityScore`                                                                                                                  | Raw Stage 1 demand score          |
+| **AS** — Stage 1 Final  | `ConsolidatedPriorityScore`                                                                                                      | Stage 1 automated baseline        |
+| **AT ✅** — Final       | `ConsolidationPriorityScore`                                                                                                     | **Canonical Stage 3 final score** |
+
+**File:** `final_hybrid_deployment_report.xlsx`
 
 ---
 
 ## Key Formulas
-
-This section documents the exact formulas used for every important derived column.
-
----
 
 ### Stage 1 Formulas
 
@@ -220,8 +297,6 @@ Adjusted_Target = Virtual Norm × ST_NORM_MULTIPLIER    (if Market == 'ST')   [d
 ```
 
 > **Note:** For EXP (Export) data from BMR, `Adjusted_Target` is `NaN` because BMR does not provide a Virtual Norm. BMR's Requirement and Penetration are taken as-is.
->
-> To apply a conservative RE target (former behaviour), set `RE_NORM_MULTIPLIER = 0.5` in `config_input.xlsx`.
 
 ---
 
@@ -245,19 +320,17 @@ Penetration = (Virtual Norm − Stock) / Virtual Norm × 100
              = 0    (if Virtual Norm == 0, to avoid division by zero)
 ```
 
-> The `Adjusted_Target` (which is 50% of Virtual Norm for RE market) is used **only** when calculating `Requirement`, not `Penetration`. This ensures the penetration signal reflects true buffer depletion for all markets.
-
 ---
 
 #### `NormPenetration` / `NormRequirement`
 
-Min-max normalisation across all SKUs in the same date batch, so each metric contributes equally to the score regardless of scale.
+Min-max normalisation across all SKUs in the same date batch.
 
 ```
 NormPenetration  = (Penetration  − min(Penetration))  / (max(Penetration)  − min(Penetration))
 NormRequirement  = (Requirement  − min(Requirement))  / (max(Requirement)  − min(Requirement))
 
-# Both return 0.0 everywhere when max == min (avoids division by zero)
+# Both return 1.0 everywhere when max == min (avoids division by zero)
 ```
 
 ---
@@ -281,13 +354,13 @@ PriorityScore_Inventory = Σ  [BlackCount(loc) × LocationWeight(loc) × INVENTO
 | Feeder         | 2      |
 | PWH            | 1      |
 
-> `INVENTORY_BLACK_FACTOR` (default `1.0`) and `INVENTORY_RED_FACTOR` (default `0.5`) are configurable via `config_input.xlsx`. Black = critical stockout; Red = warning state.
+> `INVENTORY_BLACK_FACTOR` (default `1.0`) and `INVENTORY_RED_FACTOR` (default `0.5`) are configurable via `config_input.xlsx`.
 
 ---
 
 #### `PriorityScore` (Demand Score)
 
-Composite demand urgency score. Uses normalized sub-scores so that a raw large quantity doesn't dominate unfairly.
+Composite demand urgency score using normalized sub-scores.
 
 ```
 PriorityScore = (MarketWeight        × market_weightage)     [default: 0.25]
@@ -301,8 +374,10 @@ PriorityScore = (MarketWeight        × market_weightage)     [default: 0.25]
 | Market | Weight | Description                           |
 | ------ | ------ | ------------------------------------- |
 | OE     | 4      | Original Equipment — highest priority |
+| OE10   | 4      | OE (10-inch) — same priority as OE    |
 | ST     | 3      | Stock Transfer                        |
 | EXP    | 2      | Export                                |
+| OTR    | 2      | Other (configurable)                  |
 | RE     | 1      | Replacement — lowest priority         |
 
 **TopSKUFlag:** `1` if the SKU is flagged as a Top SKU in the BPR report, else `0`.
@@ -311,13 +386,13 @@ PriorityScore = (MarketWeight        × market_weightage)     [default: 0.25]
 
 #### `NormInventoryScore`
 
-Min-max normalises the raw inventory score to [0, 1].
+Min-max normalises raw inventory score to [0, 1].
 
 ```
 NormInventoryScore = (PriorityScore_Inventory − min(PriorityScore_Inventory))
                    / (max(PriorityScore_Inventory) − min(PriorityScore_Inventory))
 
-# Returns 0.0 everywhere when max == min
+# Returns 1.0 everywhere when max == min
 ```
 
 ---
@@ -334,7 +409,7 @@ HistoryPenetrationScore = 0                        (if SKU is Red today)
 HistoryPenetrationScore = consecutive black days   (if SKU is Black today, capped at N)
 
 NormHistoryPenetrationScore = (HistoryPenetrationScore − min) / (max − min)
-# Returns 0.0 everywhere when max == min
+# Returns 1.0 everywhere when max == min
 ```
 
 **Example (N = 10):**
@@ -348,9 +423,9 @@ NormHistoryPenetrationScore = (HistoryPenetrationScore − min) / (max − min)
 
 ---
 
-#### `ConsolidatedPriorityScore`
+#### `ConsolidatedPriorityScore` (Stage 1 Final Score)
 
-Single unified score combining demand urgency, inventory criticality, revenue potential, and historical black-day streak. All four weights are fully configurable.
+Single unified score combining demand urgency, inventory criticality, revenue potential, and historical black-day streak. This is the **raw automated baseline** carried through to Stage 2 and 3.
 
 ```
 ConsolidatedPriorityScore = (PriorityScore               × CONSOLIDATED_demand_priority)      [default: 0.35]
@@ -366,27 +441,23 @@ ConsolidatedPriorityScore = (PriorityScore               × CONSOLIDATED_demand_
 
 #### `daily_cure` (Daily Machine Capacity per SKU)
 
-Number of tires a single machine can cure in a full 24-hour day, accounting for an efficiency factor.
-
 ```
 daily_cure = ⌈ (1440 minutes / (Cure Time + 2.5)) × EFFICIENCY_FACTOR ⌉
 ```
 
-> `+2.5` minutes accounts for the standard loading/unloading buffer added to every cycle.
+> `+2.5` minutes accounts for the standard loading/unloading buffer.
 
 ---
 
 #### `rev_pot` (Revenue Potential)
 
-Daily revenue a single machine generates for this SKU.
-
 ```
 rev_pot = ASP × daily_cure
 ```
 
-> `ASP` (Average Selling Price) is computed from `DISPATCH1.csv` as `Amt.in loc.cur. / Quantity`, then grouped by **(Material, Market_Group)** for Plant 1300.
+> `ASP` (Average Selling Price) is computed from `DISPATCH1.csv` as `Amt.in loc.cur. / Quantity`, grouped by **(Material, Market_Group)** for Plant 1300.
 >
-> - **OE market** SKUs use the ASP averaged from OE-channel transactions only.
+> - **OE/OE10 market** SKUs use the OE-channel ASP.
 > - **All other markets** (RE, ST, OTR, EXP) share the RE-channel ASP.
 > - Falls back to `DEFAULT_ASP` when no dispatch history exists for a (SKU, market group) pair.
 
@@ -398,14 +469,12 @@ Min-max normalised revenue potential.
 
 ```
 price_priority = (rev_pot − min(rev_pot)) / (max(rev_pot) − min(rev_pot))
-# Returns 0.0 everywhere when max == min
+# Returns 1.0 everywhere when max == min
 ```
 
 ---
 
 #### `size`
-
-Rim size extracted from the SKU code.
 
 ```
 size = characters at position [8:10] of SKUCode  (converted to integer)
@@ -414,6 +483,66 @@ size = characters at position [8:10] of SKUCode  (converted to integer)
 ---
 
 ### Stage 2 Formulas
+
+#### `weighted_score`
+
+Step 1 of the manual scoring pipeline (range: [0, 1]).
+
+```
+market_score   = MARKET_SCORE[Market]               (from config_stage2.py)
+norm_market    = minmax(market_score)
+norm_qty       = minmax(Quantity)
+norm_date      = 1 − minmax(days_remaining_to_Target_Date)  ← inverted: closer = higher
+
+weighted_score = W_MARKET × norm_market
+              + W_QTY    × norm_qty
+              + W_DATE   × norm_date
+```
+
+**Default weights (config_stage2.py):**
+
+| Weight          | Default | Controls                         |
+| --------------- | ------- | -------------------------------- |
+| `W_MARKET`      | 0.30    | Market urgency contribution      |
+| `W_QTY`         | 0.40    | Quantity urgency contribution    |
+| `W_TARGET_DATE` | 0.30    | Target date urgency contribution |
+
+---
+
+#### `modified_priority_score`
+
+Step 3: Boosts `HighestPriority = 1` rows above all HP=0 rows.
+
+```
+max_ws = max(weighted_score)   # across ALL manual rows
+
+For HP=1 rows:
+    modified_priority_score = max_ws × (1 + priority_rank / P)
+    Range: (max_ws, 2 × max_ws]
+
+For HP=0 rows:
+    modified_priority_score = weighted_score   (unchanged)
+```
+
+---
+
+#### `ConsolidationPriorityScore` (Stage 2 / 3 Final Score)
+
+Step 4: Lifts all manual rows above all automated rows.
+
+```
+max_auto  = max(ConsolidatedPriorityScore)   # from Stage 1 automated output
+overall_rank = rank by modified_priority_score ASCENDING  (1 = lowest, N = most urgent)
+
+ConsolidationPriorityScore = max_auto × (1 + overall_rank / N)
+Range: (max_auto, 2 × max_auto]  → all manual rows above all automated rows ✓
+```
+
+This is the **canonical final score** for both Stage 2 and Stage 3 output.
+
+---
+
+### Stage 3 (Deployment) Formulas
 
 #### `MouldHealth` (per machine row)
 
@@ -435,18 +564,18 @@ MachineCount = count of unique machine names (WCNAME) running this SKU
 
 #### `ProxyPenetration`
 
-Adjusts the Tier 1 priority score downward for SKUs already in active production. More machines running = lower urgency.
+Adjusts priority downward for SKUs already in active production (more machines = lower urgency).
 
 ```
 penalty_factor   = max(0,  1 − (MachineCount × MACHINE_COUNT_PENALTY))   [default penalty: 0.05]
 ProxyPenetration = ConsolidatedPriorityScore × penalty_factor
 ```
 
-**Example:** A SKU running on 4 machines gets a penalty factor of `1 − (4 × 0.05) = 0.80`, so its Proxy score is 80% of its original priority.
+**Example:** A SKU on 4 machines → factor = `1 − (4 × 0.05) = 0.80` → ProxyPenetration = 80% of original priority.
 
 #### `ProxyRank`
 
-Re-ranks all SKUs based on `ProxyPenetration` (descending). Lower rank = higher urgency after deployment adjustment.
+Re-ranks all SKUs by `ProxyPenetration` descending. Lower rank = higher urgency after deployment adjustment.
 
 ---
 
@@ -460,71 +589,38 @@ Re-ranks all SKUs based on `ProxyPenetration` (descending). Lower rank = higher 
 
 **Defaults:** `CRITICAL_GAP_RANK = 50`, `EXCESS_PRODUCTION_RANK = 200`, `EXCESS_MACHINE_COUNT = 2`, `MOULD_LIFE_THRESHOLD = 0.9`
 
----
+#### `Updated_Requirement` (Yield Factor)
 
-### Stage 3 Formulas
-
-#### `ManualPriorityScore` (Super-Boost)
-
-Assigns a score guaranteed to exceed any automated Tier 2 score (automated max ≈ 1.0).
+Adjusts the production requirement to account for manufacturing yield loss.
 
 ```
-ManualPriorityScore = BOOST_BASE + (HighestPriority × BOOST_MULTIPLIER)
-                    = 10.0      + (1 or 0           × 1.0)
+For OE, OE10, EXP markets:
+    Updated_Requirement = ⌈ Requirement / yield_factor + k ⌉
+
+For RE, ST, OTR and other markets:
+    Updated_Requirement = Requirement  (yield factor = 100%, no adjustment)
 ```
 
-| `HighestPriority` | `ManualPriorityScore` | Effect                                              |
-| ----------------- | --------------------- | --------------------------------------------------- |
-| 1                 | 11.0                  | Absolute top of queue                               |
-| 0                 | 10.0                  | Top of manual block, below Highest Priority entries |
-
----
-
-#### `StrategicPriorityScore` (Unified Score)
-
-A single consolidated score for the entire hybrid report regardless of source.
-
-```
-StrategicPriorityScore = ManualPriorityScore       (if Source == 'Manual')
-                       = ConsolidatedPriorityScore  (if Source == 'Automated')
-```
-
----
-
-#### Overstock Penalty
-
-SKUs with `Penetration > 100%` (already overstocked) are moved to the bottom of the report. **Manual entries are immune.**
-
-```
-is_overstock = (Penetration > 100%) AND (Source != 'Manual')
-
-StrategicPriorityScore[is_overstock] = StrategicPriorityScore × OVERSTOCK_PENALTY_FACTOR
-                                     = 0  (default → collapses to zero, always last)
-```
-
-Overstock rows are then sorted by `Penetration ascending` (least overstocked first within the penalty partition).
-
----
+> `yield_factor` and `k` (extra units buffer) are configurable.
 
 #### `Final Rank`
 
-Continuous integer sequence (1, 2, 3, …) assigned after all sorting and penalties are applied. This is the definitive production sequence.
-
 ```
-Final Rank = row index + 1   (after all sorting is complete)
+Final Rank = row index + 1   (after all sorting by ConsolidationPriorityScore DESC)
 ```
 
 ---
 
 ## Column Reference
 
-### Group 0 — Primary Sequence
+### Group A — Primary Sequence
 
-| Column       | Description                                                  |
-| ------------ | ------------------------------------------------------------ |
-| `Final Rank` | **Stage 3 only.** The definitive production sequence number. |
+| Column                            | Stage | Description                                             |
+| --------------------------------- | ----- | ------------------------------------------------------- |
+| `Final Rank`                      | 3     | Definitive production sequence number (1 = most urgent) |
+| `Rank_ConsolidationPriorityScore` | 2     | Stage 2 rank (1 = most urgent)                          |
 
-### Group 1 — Identification
+### Group B — SKU Identification
 
 | Column            | Description                                 |
 | ----------------- | ------------------------------------------- |
@@ -532,61 +628,68 @@ Final Rank = row index + 1   (after all sorting is complete)
 | `SKU Description` | Human-readable product name                 |
 | `size`            | Rim size extracted from SKUCode (chars 8–9) |
 
-### Group 2 — Source & Override (Stage 3)
+### Group C — Source & Manual Inputs
 
-| Column                   | Description                                       |
-| ------------------------ | ------------------------------------------------- |
-| `Source`                 | `Manual` or `Automated`                           |
-| `HighestPriority`        | `1` = flagged as highest priority in manual input |
-| `ManualPriorityScore`    | Super-Boost score (10.0 or 11.0)                  |
-| `ManualRank`             | Rank within manual block only                     |
-| `StrategicPriorityScore` | Unified score used for final sorting              |
+| Column            | Description                                       |
+| ----------------- | ------------------------------------------------- |
+| `Source`          | `Manual` or `Automated`                           |
+| `HighestPriority` | `1` = flagged as highest priority in manual input |
+| `Target Date`     | When the CPT quantity is needed                   |
+| `Quantity`        | CPT / manual production quantity                  |
 
-### Group 3 — Targets
+### Group D — Manual Scoring Intermediates
+
+| Column                    | Description                                                           |
+| ------------------------- | --------------------------------------------------------------------- |
+| `weighted_score`          | Step 1: Weighted input score (market + qty + date urgency, range 0–1) |
+| `modified_priority_score` | Step 3: HP=1 boosted score (range: (max_ws, 2×max_ws])                |
+| `manual_rank`             | Rank within manual block only (1 = most urgent manual SKU)            |
+
+### Group E — Market & Targets
 
 | Column            | Description                                                              |
 | ----------------- | ------------------------------------------------------------------------ |
-| `Market`          | `OE`, `ST`, `EXP`, or `RE`                                               |
+| `Market`          | `OE`, `OE10`, `ST`, `EXP`, `OTR`, or `RE`                                |
 | `Norm `           | Original production norm                                                 |
 | `Virtual Norm`    | Adjusted norm used as baseline                                           |
 | `Adjusted_Target` | Virtual Norm × market multiplier (configurable; default 1.0 all markets) |
 
-### Group 4 — Demand Signals
+### Group F — Demand Signals
 
 | Column                | Description                                                                                  |
 | --------------------- | -------------------------------------------------------------------------------------------- |
 | `Stock`               | Current on-hand stock                                                                        |
-| `Vector_Requirement`  | Stage 1/2 automated requirement (before any override)                                        |
-| `CPT_Requirement`     | Manual override quantity (Stage 3 only)                                                      |
+| `Vector_Requirement`  | Stage 1 automated requirement (before any override), keyed by (SKUCode, Market)              |
+| `CPT_Requirement`     | Manual override quantity                                                                     |
 | `Requirement`         | Final requirement used for calculations                                                      |
 | `Updated_Requirement` | Yield-adjusted requirement for OE/EXP: `⌈Req / yield_factor + k⌉`; = `Requirement` otherwise |
 | `Penetration`         | `(Virtual Norm − Stock) / Virtual Norm × 100` (always 100% of Virtual Norm)                  |
-| `NormPenetration`     | Min-max of Penetration: `(x − min) / (max − min)`                                            |
-| `NormRequirement`     | Min-max of Requirement: `(x − min) / (max − min)`                                            |
+| `NormPenetration`     | Min-max of Penetration                                                                       |
+| `NormRequirement`     | Min-max of Requirement                                                                       |
 
-### Group 5 — SKU Attributes
+### Group G — SKU Attributes
 
 | Column         | Description                                                                |
 | -------------- | -------------------------------------------------------------------------- |
 | `TopSKUFlag`   | Binary: `1` if Top SKU (from BPR), else `0`                                |
-| `MarketWeight` | Numeric weight for market (OE=4, ST=3, EXP=2, OTR=2, RE=1)                 |
+| `MarketWeight` | Numeric weight for market (OE/OE10=4, ST=3, EXP/OTR=2, RE=1)               |
 | `priority`     | Sortable tuple: `(−MarketWeight, −Penetration, −Requirement, −TopSKUFlag)` |
 
-### Group 6 — Inventory Signals
+### Group H — Inventory Signals
 
-| Column                    | Description                                                     |
-| ------------------------- | --------------------------------------------------------------- |
-| `PriorityScore_Inventory` | Weighted sum of Red/Black stockouts across all locations        |
-| `NormInventoryScore`      | Min-max of `PriorityScore_Inventory`: `(x − min) / (max − min)` |
+| Column                    | Description                                              |
+| ------------------------- | -------------------------------------------------------- |
+| `PriorityScore_Inventory` | Weighted sum of Red/Black stockouts across all locations |
+| `NormInventoryScore`      | Min-max of `PriorityScore_Inventory`                     |
 
-### Group 6b — History Penetration
+### Group I — History Penetration
 
-| Column                        | Description                                                     |
-| ----------------------------- | --------------------------------------------------------------- |
-| `HistoryPenetrationScore`     | Consecutive black days from today backward (0 – N)              |
-| `NormHistoryPenetrationScore` | Min-max of `HistoryPenetrationScore`: `(x − min) / (max − min)` |
+| Column                        | Description                               |
+| ----------------------------- | ----------------------------------------- |
+| `HistoryPenetrationScore`     | Consecutive black days from today (0 – N) |
+| `NormHistoryPenetrationScore` | Min-max of `HistoryPenetrationScore`      |
 
-### Group 7 — Deployment Metrics & Flags (Stage 2+)
+### Group J — Deployment Metrics & Flags (Stage 3 only)
 
 | Column             | Description                                                       |
 | ------------------ | ----------------------------------------------------------------- |
@@ -599,7 +702,7 @@ Final Rank = row index + 1   (after all sorting is complete)
 | `MouldAlert`       | `True` if `AvgMouldHealth > 0.9`                                  |
 | `IsGhostSKU`       | `True` for SKUs running on machines but absent from Vector demand |
 
-### Group 8 — Revenue & Efficiency
+### Group K — Revenue & Efficiency
 
 | Column           | Description                                                                                 |
 | ---------------- | ------------------------------------------------------------------------------------------- |
@@ -607,23 +710,24 @@ Final Rank = row index + 1   (after all sorting is complete)
 | `Cure Time`      | Curing cycle time from static file (minutes)                                                |
 | `daily_cure`     | `⌈(1440 / (Cure Time + 2.5)) × Efficiency_Factor⌉` — units per day per machine              |
 | `rev_pot`        | `ASP × daily_cure` — daily revenue potential per machine (₹)                                |
-| `price_priority` | Min-max of `rev_pot`: `(x − min) / (max − min)` — normalised revenue score                  |
+| `price_priority` | Min-max of `rev_pot` — normalised revenue score                                             |
 
-### Group 9 — Scoring & Ranking
+### Group L — Scoring Summary (always last columns)
 
-| Column                           | Description                                                                                                                               |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `PriorityScore`                  | Demand-only score: weighted sum of market, penetration, requirement, top SKU                                                              |
-| `ConsolidatedPriorityScore`      | Unified score: `PriorityScore×w1 + NormInventoryScore×w2 + price_priority×w3 + NormHistoryPenetrationScore×w4` (all weights configurable) |
-| `Rank_ConsolidatedPriorityScore` | Final rank based on `ConsolidatedPriorityScore` (lower = higher priority)                                                                 |
+| Column                       | Stage  | Description                                                                            |
+| ---------------------------- | ------ | -------------------------------------------------------------------------------------- |
+| `PriorityScore`              | 1+     | Demand-only score: weighted market + penetration + requirement + TopSKU                |
+| `ConsolidatedPriorityScore`  | 1+     | Stage 1 unified score (automated baseline): demand + inventory + revenue + history     |
+| `ConsolidationPriorityScore` | 2/3 ✅ | **Final canonical score** for Stage 2 & 3. All manual rows guaranteed > all automated. |
 
 ---
 
 ## Configuration
 
-All parameters are stored in `config_input.xlsx`. Run `python create_config_excel.py` once to generate this file, then edit it as needed. **No code changes are required to tune the system.**
+All Stage 1 parameters are stored in `config_input.xlsx`. Run `python create_config_excel.py` once to generate this file.  
+Stage 2 / 3 manual scoring weights are stored in `config_stage2.py`.
 
-### Stage 1 Config (`Stage1_Config` sheet)
+### Stage 1 Config (`Stage1_Config` sheet in `config_input.xlsx`)
 
 | Parameter                          | Default | Description                                                                         |
 | ---------------------------------- | ------- | ----------------------------------------------------------------------------------- |
@@ -654,7 +758,27 @@ All parameters are stored in `config_input.xlsx`. Run `python create_config_exce
 | `DEFAULT_ASP`                      | 3000    | Fallback ASP when no dispatch history                                               |
 | `DEFAULT_CURE_TIME`                | 15      | Fallback cure time (minutes)                                                        |
 
-### Stage 2 Config (`Stage2_Config` sheet)
+### Stage 2 / 3 Config (`config_stage2.py`)
+
+| Parameter       | Default   | Description                                                   |
+| --------------- | --------- | ------------------------------------------------------------- |
+| `W_MARKET`      | 0.30      | Weight for market urgency in `weighted_score` (must sum to 1) |
+| `W_QTY`         | 0.40      | Weight for quantity in `weighted_score`                       |
+| `W_TARGET_DATE` | 0.30      | Weight for target date urgency in `weighted_score`            |
+| `MARKET_SCORE`  | see below | Maps market codes → numeric urgency scores                    |
+
+**`MARKET_SCORE` defaults:**
+
+| Market | Score |
+| ------ | ----- |
+| OE     | 4     |
+| OE10   | 4     |
+| ST     | 3     |
+| EXP    | 2     |
+| OTR    | 2     |
+| RE     | 1     |
+
+### Stage 3 Deployment Config (`Stage2_Config` sheet in `config_input.xlsx`)
 
 | Parameter                | Default | Description                                   |
 | ------------------------ | ------- | --------------------------------------------- |
@@ -699,19 +823,21 @@ You will be prompted for:
 - **Start date** (DD.MM.YYYY)
 - **End date** (DD.MM.YYYY)
 
-Output: `combined_data_output.xlsx` (one sheet per date)
+Output: `combined_vector_demand_<DDMMYYYY>.xlsx` (one sheet per date, filename uses end date)
 
 ---
 
 ## Troubleshooting
 
-| Problem                             | Cause                                 | Fix                                                                                |
-| ----------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------- |
-| `config_input.xlsx not found`       | Config file not generated             | Run `python create_config_excel.py`                                                |
-| `Missing files` warning for a date  | Input CSVs/XLSXs absent for that date | Check file naming and the `data/` directory structure                              |
-| All SKUs show `MachineCount = 0`    | Mould report file not found           | Verify `DDMMYYYY MouldDetails.csv` exists in `data/Vectordata/Daily Mould Report/` |
-| Empty merge results                 | SKUCode type mismatch                 | All SKUCode columns are auto-cast to `str` — check source file encoding            |
-| Manual entries not appearing at top | `manual_frontend_demand.xlsx` missing | Create `data/manual_frontend_demand.xlsx` with required columns                    |
+| Problem                                  | Cause                                 | Fix                                                                                |
+| ---------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------- |
+| `config_input.xlsx not found`            | Config file not generated             | Run `python create_config_excel.py`                                                |
+| `Missing files` warning for a date       | Input CSVs/XLSXs absent for that date | Check file naming and the `data/` directory structure                              |
+| All SKUs show `MachineCount = 0`         | Mould report file not found           | Verify `DDMMYYYY MouldDetails.csv` exists in `data/Vectordata/Daily Mould Report/` |
+| Empty merge results                      | SKUCode type mismatch                 | All SKUCode columns are auto-cast to `str` — check source file encoding            |
+| Manual entries not appearing at top      | `manual_frontend_demand.xlsx` missing | Create `data/manual_frontend_demand.xlsx` with required columns                    |
+| Govt-market manual entry gets wrong Req  | Cross-market contamination (fixed)    | Lookup now uses **(SKUCode, Market)** composite key — no cross-market inheritance  |
+| `W_MARKET + W_QTY + W_TARGET_DATE ≠ 1.0` | Config weights don't sum to 1         | Edit `config_stage2.py` — three weights must sum exactly to 1.0                    |
 
 ---
 
