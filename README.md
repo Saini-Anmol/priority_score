@@ -25,11 +25,11 @@ A three-stage manufacturing priority and deployment analysis engine that transfo
 
 The system processes daily manufacturing data through three sequential stages:
 
-| Stage                                            | Module                            | Output File                              |
-| ------------------------------------------------ | --------------------------------- | ---------------------------------------- |
-| **Stage 1** – Demand Prioritization              | `demand_processor.py`             | `combined_vector_demand_<DDMMYYYY>.xlsx` |
-| **Stage 2** – Frontend / Manual Integration      | `frontend_processor.py`           | `deployment_analysis_report.xlsx`        |
-| **Stage 3** – Manual Strategic Override (Hybrid) | `manual_integration_processor.py` | `final_hybrid_deployment_report.xlsx`    |
+| Stage                                            | Module                            | Output File                                      |
+| ------------------------------------------------ | --------------------------------- | ------------------------------------------------ |
+| **Stage 1** – Demand Prioritization              | `demand_processor.py`             | `combined_vector_demand_<DDMMYYYY>.xlsx`         |
+| **Stage 2** – Frontend / Manual Integration      | `frontend_processor.py`           | `vector_frontend_demand_<DDMMYYYY>.xlsx`         |
+| **Stage 3** – Manual Strategic Override (Hybrid) | `manual_integration_processor.py` | `vector_frontend_running_demand_<DDMMYYYY>.xlsx` |
 
 Each stage enriches the data further. Stage 3 is the final, actionable production sequence delivered to the plant floor.
 
@@ -55,6 +55,10 @@ Vector_Project/
 ├── PROCESS_DOCUMENTATION.md        # Detailed process & formula documentation
 ├── requirements.txt                # Python dependencies
 ├── .gitignore
+├── CTP/                            # CTP (Cure Time Process) reference data
+│   ├── SKU_List.xlsx               # CTP SKU master list
+│   ├── cure_cycletime 1.xlsx       # Cure cycle time reference
+│   └── vector_data_split/         # Split vector data for CTP processing
 └── data/                           # Data directory (not tracked by git)
 ```
 
@@ -154,6 +158,8 @@ PriorityScore + NormInventoryScore + price_priority + NormHistoryPenetrationScor
 
 Stage 2 merges manually-entered CPT (Customer/Planner) demand from `manual_frontend_demand.xlsx` with the Stage 1 automated output. Manual entries are scored using a principled **4-step weighted pipeline** and are guaranteed to outrank all automated SKUs.
 
+> **Output filename:** `vector_frontend_demand_<DDMMYYYY>.xlsx` — date-stamped per run.
+
 ### Manual Input File
 
 **File:** `data/manual_frontend_demand.xlsx`
@@ -226,7 +232,7 @@ Manual entries supersede automated rows using a **(SKUCode, Market)** composite 
 | **AG** — Stage 1 Score  | `PriorityScore`                                                                   | Raw Stage 1 demand score             |
 | **AH ✅** — Final       | `ConsolidationPriorityScore`                                                      | **Canonical Stage 2 final score**    |
 
-**File:** `deployment_analysis_report.xlsx`
+**File:** `vector_frontend_demand_<DDMMYYYY>.xlsx`
 
 ---
 
@@ -237,6 +243,8 @@ Manual entries supersede automated rows using a **(SKUCode, Market)** composite 
 
 Stage 3 uses the **same 4-step weighted pipeline** as Stage 2 to score manual entries, ensuring full consistency. It additionally attaches mould/machine deployment metrics from `deployment_processor.py`.
 
+> **Output filename:** `vector_frontend_running_demand_<DDMMYYYY>.xlsx` — date-stamped per run.
+
 ### Processing Flow
 
 ```
@@ -246,6 +254,7 @@ Manual entries  →  4-step weighted scoring (identical to Stage 2)
 
 Supersede automated rows by (SKUCode, Market) match
 Attach mould metrics (MachineCount, AvgMouldHealth) to manual rows
+Set Penetration = 100.0 for all manual rows (fully buffer-depleted)
 Concat manual + automated  →  sort by ConsolidationPriorityScore DESC
 Final Rank = row index + 1
 ```
@@ -802,7 +811,7 @@ You will be prompted for:
 
 - **Analysis date** (DD.MM.YYYY)
 
-Output: `final_hybrid_deployment_report.xlsx`
+Output: `vector_frontend_running_demand_<DDMMYYYY>.xlsx`
 
 ### Run Stage 1 + 2 Only
 
@@ -810,7 +819,7 @@ Output: `final_hybrid_deployment_report.xlsx`
 python app_stage2.py
 ```
 
-Output: `deployment_analysis_report.xlsx`
+Output: `vector_frontend_demand_<DDMMYYYY>.xlsx`
 
 ### Run Stage 1 Only (date range)
 

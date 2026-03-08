@@ -6,7 +6,7 @@
 #   Stage 2 → process_deployment_analysis()  (deployment_processor.py)
 #   Stage 3 → process_manual_override()      (manual_integration_processor.py)
 #
-# Output: final_hybrid_deployment_report.xlsx  (date-wise sheet tabs)
+# Output: vector_frontend_running_demand_<DDMMYYYY>.xlsx  (date-wise sheet tabs)
 
 import numpy as np
 import pandas as pd
@@ -18,7 +18,7 @@ from deployment_processor import process_deployment_analysis
 from manual_integration_processor import process_manual_override
 
 
-STAGE3_OUTPUT_FILE = "final_hybrid_deployment_report.xlsx"
+STAGE3_OUTPUT_FILE = "final_hybrid_deployment_report.xlsx"  # overridden dynamically below
 
 
 def run_hybrid_analysis():
@@ -43,6 +43,7 @@ def run_hybrid_analysis():
     try:
         date_obj       = datetime.strptime(date_str, "%d.%m.%Y")
         date_formatted = date_obj.strftime("%d%m%Y")
+        output_file    = f"vector_frontend_running_demand_{date_formatted}.xlsx"
 
         print(f"\nProcessing analysis for: {date_obj.strftime('%d-%m-%Y')}")
         print("-" * 80)
@@ -131,7 +132,7 @@ def run_hybrid_analysis():
         print(f"[OUTPUT] Loading BOR history for last {n_days} days...")
         history_bor = get_history_bor_data(date_formatted, n_days)
 
-        with pd.ExcelWriter(STAGE3_OUTPUT_FILE, engine="openpyxl") as writer:
+        with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
 
             # ── Tab 1: Full Stage 3 hybrid output ──────────────────────────
             hybrid_df.to_excel(writer, sheet_name=date_formatted, index=False)
@@ -163,7 +164,7 @@ def run_hybrid_analysis():
                 tabs_written += 1
                 print(f"  [History Tab] {date_label} — {len(bor_df)} rows")
 
-        print(f"\n✓ Report successfully generated: {STAGE3_OUTPUT_FILE}")
+        print(f"\n✓ Report successfully generated: {output_file}")
         print(f"  Sheet : {date_formatted}  (Stage 3 output)")
         print(f"  Rows  : {len(hybrid_df)}")
         print(f"  History BOR tabs written: {tabs_written} of {n_days}")

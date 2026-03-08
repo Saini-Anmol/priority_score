@@ -5,14 +5,14 @@
 #   Stage 1 → process_single_date()        (demand_processor.py)
 #   Stage 2 → process_frontend_override()  (frontend_processor.py)
 #
-# Output: deployment_analysis_report.xlsx  (date-wise sheet tab)
+# Output: vector_frontend_demand_<DDMMYYYY>.xlsx  (date-wise sheet tab)
 
 import pandas as pd
 from datetime import datetime
 from demand_processor import process_single_date
 from frontend_processor import process_frontend_override
 
-STAGE2_OUTPUT_FILE = "deployment_analysis_report.xlsx"
+STAGE2_OUTPUT_FILE = "deployment_analysis_report.xlsx"  # overridden dynamically below
 
 
 def run_integrated_analysis():
@@ -36,6 +36,7 @@ def run_integrated_analysis():
     try:
         date_obj       = datetime.strptime(date_str, "%d.%m.%Y")
         date_formatted = date_obj.strftime("%d%m%Y")
+        output_file    = f"vector_frontend_demand_{date_formatted}.xlsx"
 
         print(f"\nProcessing analysis for: {date_obj.strftime('%d-%m-%Y')}")
         print("-" * 80)
@@ -73,10 +74,10 @@ def run_integrated_analysis():
         if "Final Rank" in final_df.columns:
             final_df = final_df.sort_values("Final Rank", ascending=True)
 
-        with pd.ExcelWriter(STAGE2_OUTPUT_FILE, engine='openpyxl') as writer:
+        with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
             final_df.to_excel(writer, sheet_name=date_formatted, index=False)
 
-        print(f"\n✓ Report successfully generated: {STAGE2_OUTPUT_FILE}")
+        print(f"\n✓ Report successfully generated: {output_file}")
         print(f"  Sheet: {date_formatted}")
         print(f"  Total SKUs analyzed: {len(final_df)}")
 

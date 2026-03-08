@@ -270,6 +270,9 @@ def _build_manual_rows(
     manual_rows["CPT_Requirement"]     = manual_df["Quantity"]
     manual_rows["Requirement"]         = manual_df["Quantity"]
 
+    # Manual entries are actively demanded — treat as fully buffer-depleted (100% penetration)
+    manual_rows["Penetration"]         = 100.0
+
     # Ghost SKU flag: manual entries are always real demand
     manual_rows["IsGhostSKU"]          = False
 
