@@ -465,6 +465,8 @@ def _select_output_columns(df: pd.DataFrame) -> pd.DataFrame:
         'ASP', 'Cure Time', 'price_priority',
 
         # --- Scoring Details ---
-        'PriorityScore', 'ConsolidatedPriorityScore',
+        # Note: ConsolidatedPriorityScore (Stage 1 raw score) is intentionally
+        # excluded — ConsolidationPriorityScore is the canonical Stage 2 final score.
+        'PriorityScore',
     ]
     return df[[c for c in output_columns if c in df.columns]]
