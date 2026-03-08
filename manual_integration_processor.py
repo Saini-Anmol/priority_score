@@ -452,51 +452,79 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
 
 
 def _select_output_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Select and order Stage 3 output columns."""
+    """Select and order Stage 3 output columns.
+
+    Column groups (A → Z order):
+        A    : Final Rank
+        B–D  : SKU Identification
+        E–H  : Source & Manual Inputs
+        I–K  : Manual Scoring Intermediates
+        L    : Market
+        M–O  : Production Targets
+        P–W  : Demand Signals (incl. Updated_Requirement)
+        X–Z  : SKU Attributes
+        AA–AB: Inventory Signals
+        AC–AD: History Penetration
+        AE–AL: Deployment Metrics & Gap Flags   ← Stage 3-only columns
+        AM–AQ: Revenue & Efficiency
+        AR   : Stage 1 Raw Score (PriorityScore)
+        AS   : Stage 1 Final Score (ConsolidatedPriorityScore)
+        AT   : ──► FINAL STAGE 3 SCORE (ConsolidationPriorityScore — always last)
+    """
     output_columns = [
-        # --- Group 0: Primary Production Sequence ---
+        # A — Final Rank
         'Final Rank',
 
-        # --- Group 1: Identification ---
+        # B–D — SKU Identification
         'SKUCode', 'SKU Description', 'size',
 
-        # --- Group 2: Source & Override Tag ---
+        # E–H — Source & Manual Inputs
         'Source', 'HighestPriority', 'Target Date', 'Quantity',
 
-        # --- Group 3: Manual Scoring Breakdown (Stage 2-consistent) ---
+        # I–K — Manual Scoring Intermediates
+        # weighted_score          : Step 1 weighted input (market + qty + date, range 0–1)
+        # modified_priority_score : Step 3 HP=1 boosted score
+        # manual_rank             : rank within manual block (1 = most urgent)
         'weighted_score', 'modified_priority_score', 'manual_rank',
 
-        # --- Group 4: Unified Consolidation Score ---
-        'ConsolidationPriorityScore',
+        # L — Market
+        'Market',
 
-        # --- Group 5: Targets ---
-        'Market', 'Norm ', 'Virtual Norm', 'Adjusted_Target',
+        # M–O — Production Targets
+        'Norm ', 'Virtual Norm', 'Adjusted_Target',
 
-        # --- Group 6: Demand Signals ---
-        'Stock', 'Vector_Requirement', 'CPT_Requirement',
-        'Requirement', 'Updated_Requirement', 'Penetration',
-        'NormPenetration', 'NormRequirement',
+        # P–W — Demand Signals
+        'Stock',
+        'Vector_Requirement', 'CPT_Requirement',
+        'Requirement', 'Updated_Requirement',
+        'Penetration', 'NormPenetration', 'NormRequirement',
 
-        # --- Group 7: SKU Attributes ---
+        # X–Z — SKU Attributes
         'TopSKUFlag', 'MarketWeight', 'priority',
 
-        # --- Group 8: Inventory Signals ---
+        # AA–AB — Inventory Signals
         'PriorityScore_Inventory', 'NormInventoryScore',
 
-        # --- Group 8b: History Penetration ---
+        # AC–AD — History Penetration
         'HistoryPenetrationScore', 'NormHistoryPenetrationScore',
 
-        # --- Group 9: Deployment Metrics & Gap Flags ---
+        # AE–AL — Deployment Metrics & Gap Flags  (Stage 3-only)
         'MachineCount', 'AvgMouldHealth',
         'ProxyPenetration', 'ProxyRank',
         'CriticalGap', 'ExcessProduction', 'MouldAlert', 'IsGhostSKU',
 
-        # --- Group 10: Revenue & Efficiency ---
+        # AM–AQ — Revenue & Efficiency
         'ASP', 'Cure Time', 'daily_cure', 'rev_pot', 'price_priority',
 
-        # --- Group 11: Detailed Scoring Components ---
+        # AR — Stage 1 raw score (before manual override lift)
         'PriorityScore',
-        'ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore',
+
+        # AS — Stage 1 final consolidated score (automated baseline reference)
+        'ConsolidatedPriorityScore',
+
+        # AT — ──► FINAL STAGE 3 SCORE (always last column)
+        # Rank_ConsolidatedPriorityScore is intentionally excluded (redundant with Final Rank).
+        'ConsolidationPriorityScore',
     ]
 
     return df[[c for c in output_columns if c in df.columns]]

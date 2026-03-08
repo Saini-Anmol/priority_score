@@ -428,45 +428,67 @@ def process_frontend_override(stage1_df: pd.DataFrame, date_str: str) -> pd.Data
 
 
 def _select_output_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Select and order Stage 2 output columns."""
+    """Select and order Stage 2 output columns.
+
+    Column groups (A → Z order):
+        A   : Final Rank
+        B–D : SKU Identification
+        E–H : Source & Manual Inputs
+        I–K : Manual Scoring Intermediates
+        L   : Market
+        M–O : Targets
+        P–V : Demand Signals
+        W–Y : SKU Attributes
+        Z–AA: Inventory Signals
+        AB–AC: History Penetration
+        AD–AF: Revenue & Efficiency
+        AG  : Stage 1 Raw Score (PriorityScore)
+        AH  : ──► ConsolidationPriorityScore (canonical Stage 2 final score — always last)
+    """
     output_columns = [
-        # --- Rank (canonical Stage 2 final rank) ---
+        # A — Rank
         'Rank_ConsolidationPriorityScore',
 
-        # --- Identification ---
+        # B–D — SKU Identification
         'SKUCode', 'SKU Description', 'size',
 
-        # --- Source & Frontend Inputs ---
+        # E–H — Source & Manual Inputs
         'Source', 'HighestPriority', 'Target Date', 'Quantity',
 
-        # --- Manual Scoring Breakdown ---
+        # I–K — Manual Scoring Intermediates
+        # weighted_score  : Step 1 raw weighted input (market + qty + date urgency, range 0–1)
+        # modified_priority_score : Step 3 HP=1 boosted score
+        # manual_rank     : rank within manual block (1 = most urgent)
         'weighted_score', 'modified_priority_score', 'manual_rank',
 
-        # --- Unified Consolidation Score (canonical Stage 2 final score, no StrategicPriorityScore) ---
-        'ConsolidationPriorityScore',
+        # L — Market
+        'Market',
 
-        # --- Targets ---
-        'Market', 'Norm ', 'Virtual Norm', 'Adjusted_Target',
+        # M–O — Production Targets
+        'Norm ', 'Virtual Norm', 'Adjusted_Target',
 
-        # --- Demand Signals ---
-        'Stock', 'Vector_Requirement', 'CPT_Requirement', 'Requirement',
+        # P–V — Demand Signals
+        'Stock',
+        'Vector_Requirement', 'CPT_Requirement', 'Requirement',
         'Penetration', 'NormPenetration', 'NormRequirement',
 
-        # --- SKU Attributes ---
+        # W–Y — SKU Attributes
         'TopSKUFlag', 'MarketWeight', 'priority',
 
-        # --- Inventory Signals ---
+        # Z–AA — Inventory Signals
         'PriorityScore_Inventory', 'NormInventoryScore',
 
-        # --- History Penetration ---
+        # AB–AC — History Penetration
         'HistoryPenetrationScore', 'NormHistoryPenetrationScore',
 
-        # --- Revenue & Efficiency ---
+        # AD–AF — Revenue & Efficiency
         'ASP', 'Cure Time', 'price_priority',
 
-        # --- Scoring Details ---
-        # Note: ConsolidatedPriorityScore (Stage 1 raw score) is intentionally
-        # excluded — ConsolidationPriorityScore is the canonical Stage 2 final score.
+        # AG — Stage 1 raw score (before manual override lift)
         'PriorityScore',
+
+        # AH — ──► FINAL STAGE 2 SCORE (always last column)
+        # ConsolidatedPriorityScore (Stage 1 raw alias) is intentionally excluded.
+        'ConsolidationPriorityScore',
     ]
     return df[[c for c in output_columns if c in df.columns]]
