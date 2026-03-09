@@ -29,75 +29,65 @@ def _minmax(series: pd.Series) -> pd.Series:
 
 def compute_history_penetration(today_bpr: pd.DataFrame, today_bor: pd.DataFrame, date_str: str, n: int) -> pd.Series:
     """
-    Compute HistoryPenetrationScore — a DISCRETE integer in [0, 10].
+    Compute HistoryPenetrationScore scored INDEPENDENTLY per (SKUCode, Market).
 
-    Scoring rules:
-      • 0  : SKU is Red (or unknown) today — no streak credit at all.
-      • 1  : SKU is Black today with Penetration >= 100%.
-      • 2  : Black + Penetration >= 100% for today AND yesterday.
-      • ...
-      • N  : Black + Penetration >= 100% every consecutive day from today
-             back through the last N-1 days (streak of N days, max = N = 10).
+    A SKU in RE and OE gets two separate scores — RE history and OE history
+    are computed entirely independently.
 
-    A day is considered "in black" ONLY when:
-        Penetration = (Virtual Norm - Stock) / Virtual Norm * 100  >= 100%
-    (i.e., stock is at or below zero relative to the virtual norm).
+    Scoring rules (per market row):
+      • 0  : Penetration < BLACK threshold today → score 0
+      • 1  : Penetration >= threshold today → at least 1
+      • k  : Penetration >= threshold for k consecutive days ending today
+      • n  : Max streak (all n days black for this SKU+Market)
 
-    This penetration is computed identically to Stage 1 / Stage 2 logic,
-    reading raw BOR files (filtered to plant-1300 locations).
-
-    The streak breaks as soon as a day is found where Penetration < 100%
-    (even if colour is Black) — or if files are missing for that day.
+    Missing BOR files (weekends/holidays) → streak continues unbroken.
 
     Args:
-        today_bpr  : BPR DataFrame for today  (SKUCode, On hand Inv. Color)
-        today_bor  : BOR DataFrame for today  (already filtered to plant-1300;
-                     has SKUCode, Virtual Norm, Stock and optionally Penetration)
+        today_bpr  : BPR DataFrame for today (kept for signature compatibility)
+        today_bor  : BOR DataFrame (filtered to plant-1300; has Market column)
         date_str   : Today's date in DDMMYYYY format.
         n          : Lookback window (config.HISTORY_PENETRATION_N). Max score = n.
 
     Returns:
-        pd.Series indexed by SKUCode with discrete integer scores in [0, n].
+        pd.Series indexed by (SKUCode, Market) tuples with integer scores in [0, n].
     """
     today = datetime.strptime(date_str, "%d%m%Y")
 
     # ------------------------------------------------------------------
-    # Helper: compute average Penetration per SKU from a raw BOR DataFrame.
-    # Uses (Virtual Norm - Stock) / Virtual Norm * 100 — same as Stage 1/2.
-    # Returns {sku: penetration_percent}  (NOT clipped; can exceed 100).
+    # Helper: compute Penetration per (SKUCode, Market).
+    # Returns {(sku, market): penetration_percent}.
+    # Market derived from Location Code for raw historical BOR files
+    # (today_bor already has Market column from process_single_date).
     # ------------------------------------------------------------------
     def _get_penetrations(bor_df: pd.DataFrame) -> dict:
         if 'Virtual Norm' not in bor_df.columns or 'Stock' not in bor_df.columns:
             return {}
         df = bor_df.copy()
         df['SKUCode'] = df['SKUCode'].astype(str)
-        # Recompute from raw columns to stay in sync with Stage 1 formula
         df['_pen'] = np.where(
             df['Virtual Norm'] == 0, 0,
             (df['Virtual Norm'] - df['Stock']) / df['Virtual Norm'] * 100
         )
-        # Average across all 1300-locations for this SKU
-        return df.groupby('SKUCode')['_pen'].mean().to_dict()
+        # Derive Market from Location Code if not already a column
+        if 'Market' not in df.columns:
+            df['Market'] = df['Location Code'].str.split('_').str[1].replace(
+                {'FG10': 'RE', 'OE10': 'OE', 'ST10': 'ST', 'OTR10': 'OTR'}
+            )
+        # One value per (SKUCode, Market) — markets are completely independent
+        return df.groupby(['SKUCode', 'Market'])['_pen'].max().to_dict()
 
     # ------------------------------------------------------------------
-    # Step 1 — Determine TODAY's state for each SKU from BOR only.
-    # NOTE: We deliberately do NOT use the BPR colour column here.
-    # The BPR dominant colour is majority-voted across ALL location types
-    # (JIT, Depot, Feeder, PWH …), while BOR is plant-1300 only.
-    # Those two can disagree, causing pen=100% SKUs to get score=0.
-    # Per spec: "black" = penetration >= 100% from BOR. Period.
+    # Step 1 — Today's (SKUCode, Market) penetrations
     # ------------------------------------------------------------------
     today_pens = _get_penetrations(today_bor)
-    all_skus   = list(today_pens.keys())
+    all_keys   = list(today_pens.keys())   # [(sku, market), ...]
 
     # ------------------------------------------------------------------
-    # Step 2 — Build day-by-day penetration snapshots for days [0 … n-1].
-    #          day_pens[i]  = {sku: penetration_pct}  for offset i from today.
-    #          day 0 = today (already computed above).
+    # Step 2 — Day-by-day snapshots: day_pens[i] = {(sku, mkt): pen%}
     # ------------------------------------------------------------------
-    day_pens = [today_pens]  # index 0 = today, 1 = yesterday, …
+    day_pens = [today_pens]
 
-    for day_offset in range(1, n):        # offsets 1 … n-1
+    for day_offset in range(1, n):
         past_date = today - timedelta(days=day_offset)
         bor_path  = (
             f'{config.BASE_DATA_PATH}/Vectordata/BOR/'
@@ -105,7 +95,7 @@ def compute_history_penetration(today_bpr: pd.DataFrame, today_bor: pd.DataFrame
         )
 
         if not os.path.exists(bor_path):
-            day_pens.append({})           # missing day → empty dict
+            day_pens.append({})           # missing day → streak intact
             continue
 
         try:
@@ -115,43 +105,29 @@ def compute_history_penetration(today_bpr: pd.DataFrame, today_bor: pd.DataFrame
                 past_bor = past_bor[past_bor['Location Code'].str.startswith('1300')]
             day_pens.append(_get_penetrations(past_bor))
         except Exception:
-            day_pens.append({})           # unreadable file → empty dict
+            day_pens.append({})           # unreadable → streak intact
 
     # ------------------------------------------------------------------
-    # Step 3 — Score each SKU.
-    # Black threshold: config.HISTORY_PENETRATION_BLACK (default 100%).
-    # User can lower this (e.g. 95) to be more lenient about what counts as "black".
-    #   Rule:
-    #     • today_pen < BLACK  → score = 0  ("red": not depleted enough today)
-    #     • today_pen >= BLACK → walk backward counting consecutive black days:
-    #         for each day (0=today, 1=yesterday, …):
-    #             BOR missing (holiday)   → continue (skip, streak intact)
-    #             penetration >= BLACK    → streak += 1
-    #             penetration < BLACK     → break (streak ends)
-    #         score = streak   (discrete integer, max = n)
+    # Step 3 — Score each (SKUCode, Market) independently
     # ------------------------------------------------------------------
     black_threshold = config.HISTORY_PENETRATION_BLACK
     scores: dict = {}
 
-    for sku in all_skus:
-        # Gate: if today's BOR penetration < threshold, SKU is "red" → score 0
-        if today_pens.get(sku, 0.0) < black_threshold:
-            scores[sku] = 0
+    for (sku, market) in all_keys:
+        if today_pens.get((sku, market), 0.0) < black_threshold:
+            scores[(sku, market)] = 0
             continue
 
         streak = 0
-        for day_idx in range(n):          # 0 = today, 1 = yesterday, …
-            pen = day_pens[day_idx].get(sku, None)
-
+        for day_idx in range(n):
+            pen = day_pens[day_idx].get((sku, market), None)
             if pen is None:
-                continue                  # missing file = holiday → skip, streak intact
-
+                continue          # missing BOR file → skip, streak intact
             if pen < black_threshold:
-                break                     # reading below threshold → streak ends
+                break             # below threshold → streak ends
+            streak += 1
 
-            streak += 1                   # pen >= threshold → count this day
-
-        scores[sku] = streak
+        scores[(sku, market)] = streak
 
     return pd.Series(scores, name='HistoryPenetrationScore', dtype=int)
 
@@ -386,8 +362,13 @@ def process_single_date(date_str):
     # Penetration recomputed from raw BOR: (Virtual Norm - Stock) / Virtual Norm * 100.
     n_days = config.HISTORY_PENETRATION_N
     history_scores = compute_history_penetration(bpr_v, bor_v, date_str, n_days)
-    combined['HistoryPenetrationScore'] = combined['SKUCode'].map(history_scores).fillna(0).astype(int)
-    # Normalize to [0, 1]: max possible score = n_days (discrete integer, so divide by N)
+    # Map scores per (SKUCode, Market) — each market-row gets its own independent score
+    _score_dict = history_scores.to_dict()   # {(sku, market): score}
+    combined['HistoryPenetrationScore'] = [
+        _score_dict.get((sku, mkt), 0)
+        for sku, mkt in zip(combined['SKUCode'], combined['Market'])
+    ]
+    combined['HistoryPenetrationScore'] = combined['HistoryPenetrationScore'].astype(int)
     combined['NormHistoryPenetrationScore'] = _minmax(combined['HistoryPenetrationScore'])
 
     # CONSOLIDATED SCORE (Demand + Inventory + Price + History Penetration)

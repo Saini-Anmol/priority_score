@@ -291,9 +291,6 @@ def _build_manual_rows(
     # ProxyRank for manual entries = manual_rank (occupies top N positions)
     manual_rows["ProxyRank"]           = manual_df["manual_rank"]
 
-    # ConsolidatedPriorityScore alias for any downstream consumers
-    manual_rows["ConsolidatedPriorityScore"] = manual_df["ConsolidationPriorityScore"]
-
     return manual_rows
 
 
@@ -522,12 +519,12 @@ def _select_output_columns(df: pd.DataFrame) -> pd.DataFrame:
         # AR — Stage 1 raw score (before manual override lift)
         'PriorityScore',
 
-        # AS — Stage 1 final consolidated score (automated baseline reference)
-        'ConsolidatedPriorityScore',
-
-        # AT — ──► FINAL STAGE 3 SCORE (always last column)
-        # Rank_ConsolidatedPriorityScore is intentionally excluded (redundant with Final Rank).
+        # AS — ──► FINAL STAGE 3 SCORE (always last column)
+        # ConsolidatedPriorityScore (Stage 1 automated baseline) is intentionally
+        # excluded here — ConsolidationPriorityScore IS the final score in Stage 3.
         'ConsolidationPriorityScore',
     ]
 
-    return df[[c for c in output_columns if c in df.columns]]
+    result = df[[c for c in output_columns if c in df.columns]]
+    # Rename final score column for clean, consistent Stage 3 output label
+    return result.rename(columns={'ConsolidationPriorityScore': 'ConsolidatedPriorityScore'})

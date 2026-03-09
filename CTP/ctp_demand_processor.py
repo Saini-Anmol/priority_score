@@ -123,14 +123,17 @@ def _load_pcr_skus() -> set:
 
 def compute_history_penetration(today_bor: pd.DataFrame, date_str: str, n: int) -> pd.Series:
     """
-    Compute HistoryPenetrationScore — discrete integer in [0, n].
+    Compute HistoryPenetrationScore scored INDEPENDENTLY per (SKUCode, Market).
 
-    Scoring rules (identical to BTP):
-      • 0  : Penetration < BLACK threshold today
-      • k  : Penetration >= BLACK threshold for k consecutive days ending today
-      • n  : Max streak (n days all black)
-
+    A SKU present in RE and OE markets gets two separate scores.
     Uses Plant-1900 BOR files only.
+
+    Scoring rules:
+      • 0  : Penetration < BLACK threshold today for this (SKU, Market)
+      • k  : Penetration >= threshold for k consecutive days ending today
+      • n  : Max streak (all n days black for this SKU+Market)
+
+    Missing BOR files (weekends/holidays) → streak continues unbroken.
     """
     today = datetime.strptime(date_str, "%d%m%Y")
 
@@ -143,11 +146,20 @@ def compute_history_penetration(today_bor: pd.DataFrame, date_str: str, n: int) 
             df['Virtual Norm'] == 0, 0,
             (df['Virtual Norm'] - df['Stock']) / df['Virtual Norm'] * 100
         )
-        return df.groupby('SKUCode')['_pen'].mean().to_dict()
+        # Derive Market from Location Code if not already a column
+        # (today_bor already has Market; raw historical files do not)
+        if 'Market' not in df.columns:
+            df['Market'] = df['Location Code'].str.split('_').str[1].replace(
+                {'FG10': 'RE', 'OE10': 'OE', 'ST10': 'ST', 'OTR10': 'OTR'}
+            )
+        # One value per (SKUCode, Market) — markets are completely independent
+        return df.groupby(['SKUCode', 'Market'])['_pen'].max().to_dict()
 
+    # Step 1 — Today's (SKUCode, Market) penetrations
     today_pens = _get_penetrations(today_bor)
-    all_skus   = list(today_pens.keys())
+    all_keys   = list(today_pens.keys())   # [(sku, market), ...]
 
+    # Step 2 — Day-by-day snapshots: {(sku, market): pen%}
     day_pens = [today_pens]
 
     for day_offset in range(1, n):
@@ -158,7 +170,7 @@ def compute_history_penetration(today_bor: pd.DataFrame, date_str: str, n: int) 
         )
 
         if not os.path.exists(bor_path):
-            day_pens.append({})
+            day_pens.append({})           # missing day → streak intact
             continue
 
         try:
@@ -168,26 +180,27 @@ def compute_history_penetration(today_bor: pd.DataFrame, date_str: str, n: int) 
                 past_bor = past_bor[past_bor['Location Code'].str.startswith(config.CTP_PLANT_PREFIX)]
             day_pens.append(_get_penetrations(past_bor))
         except Exception:
-            day_pens.append({})
+            day_pens.append({})           # unreadable → streak intact
 
+    # Step 3 — Score each (SKUCode, Market) independently
     black_threshold = config.HISTORY_PENETRATION_BLACK
     scores: dict = {}
 
-    for sku in all_skus:
-        if today_pens.get(sku, 0.0) < black_threshold:
-            scores[sku] = 0
+    for (sku, market) in all_keys:
+        if today_pens.get((sku, market), 0.0) < black_threshold:
+            scores[(sku, market)] = 0
             continue
 
         streak = 0
         for day_idx in range(n):
-            pen = day_pens[day_idx].get(sku, None)
+            pen = day_pens[day_idx].get((sku, market), None)
             if pen is None:
-                continue
+                continue          # missing BOR file → skip, streak intact
             if pen < black_threshold:
-                break
+                break             # below threshold → streak ends
             streak += 1
 
-        scores[sku] = streak
+        scores[(sku, market)] = streak
 
     return pd.Series(scores, name='HistoryPenetrationScore', dtype=int)
 
@@ -439,7 +452,13 @@ def process_single_date(date_str: str):
     # ── HISTORY PENETRATION SCORING ───────────────────────────────────────────
     n_days = config.HISTORY_PENETRATION_N
     history_scores = compute_history_penetration(bor_v, date_str, n_days)
-    combined['HistoryPenetrationScore']     = combined['SKUCode'].map(history_scores).fillna(0).astype(int)
+    # Map scores per (SKUCode, Market) — each market-row gets its own independent score
+    _score_dict = history_scores.to_dict()   # {(sku, market): score}
+    combined['HistoryPenetrationScore'] = [
+        _score_dict.get((sku, mkt), 0)
+        for sku, mkt in zip(combined['SKUCode'], combined['Market'])
+    ]
+    combined['HistoryPenetrationScore']     = combined['HistoryPenetrationScore'].astype(int)
     combined['NormHistoryPenetrationScore'] = _minmax(combined['HistoryPenetrationScore'])
 
     # ── CONSOLIDATED SCORE ────────────────────────────────────────────────────
