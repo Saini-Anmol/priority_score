@@ -136,7 +136,7 @@ def compute_history_penetration(today_bpr: pd.DataFrame, today_bor: pd.DataFrame
 # HISTORY BOR DATA EXPORT HELPER
 # ---------------------------------------------------------------------------
 
-def get_history_bor_data(date_str: str, n: int) -> list:
+def get_history_bor_data(date_str: str, n: int, plant_prefix: str = '1300') -> list:
     """
     Load and return raw BOR data for the last N days (today + N-1 historical).
 
@@ -144,7 +144,7 @@ def get_history_bor_data(date_str: str, n: int) -> list:
 
     For each day:
         - Reads BORColorBandwiseReport__DD-MM-YYYY.csv from the BOR folder.
-        - Filters to Location Code starting with '1300' (plant-1300).
+        - Filters to Location Code starting with plant_prefix (default '1300').
         - Computes Penetration = (Virtual Norm - Stock) / Virtual Norm * 100.
         - Keeps columns: SKUCode, Location Code, Norm , Virtual Norm, Stock, Penetration.
         - Missing files (weekends / holidays) → (date_label, None) in the result.
@@ -177,9 +177,9 @@ def get_history_bor_data(date_str: str, n: int) -> list:
             df = pd.read_csv(bor_path)
             df['SKUCode'] = df['SKUCode'].astype(str)
 
-            # Filter to plant-1300 locations only
+            # Filter to plant locations only
             if 'Location Code' in df.columns:
-                df = df[df['Location Code'].str.startswith('1300')].copy()
+                df = df[df['Location Code'].str.startswith(plant_prefix)].copy()
 
             # Compute Penetration from raw columns (same formula as Stage 1 / 2)
             if 'Virtual Norm' in df.columns and 'Stock' in df.columns:
@@ -214,9 +214,15 @@ def process_single_date(date_str):
     file_path3 = f'{config.BASE_DATA_PATH}/Vectordata/BMR/Prod_OverAll_BMReport__{date.strftime("%d_%m_%Y")}.xlsx'
     file_path4 = f'{config.BASE_DATA_PATH}/Vectordata/BPR/BufferPenetrationReport__{date.strftime("%d-%m-%Y")}.csv'
 
-    if not all(os.path.exists(f) for f in [file_path1, file_path2, file_path3, file_path4]):
-        print(f"Skipping {date_str}: Missing files.")
+    # SPOR is optional — processing continues without it if it's missing
+    # Only BOR, BMR, BPR are mandatory
+    mandatory_files = [file_path2, file_path3, file_path4]
+    if not all(os.path.exists(f) for f in mandatory_files):
+        print(f"Skipping {date_str}: Missing mandatory files (BOR/BMR/BPR).")
         return None
+
+    if not os.path.exists(file_path1):
+        print(f"  [NOTE] SPOR file not found for {date_str} — continuing without it.")
 
     # Load Data
     bpr_v = pd.read_csv(file_path4)

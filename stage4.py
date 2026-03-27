@@ -125,19 +125,26 @@ def _compute_updated_req(stage3_val: float, sku: str, market: str,
     """
     Return the refined Updated_Requirement for one row.
 
+    Rules:
+      OE  market → max(Stage3_Updated_Req, oe_demand[SKU])
+                   (avg_sales NOT used for OE; Ghost SKUs in oe_demand are
+                    already corrected to OE by Stage 3)
+      RE  market → max(Stage3_Updated_Req, avg_sales[SKU,RE])
+      EXP market → max(Stage3_Updated_Req, avg_sales[SKU,EXP])
+      All others → Stage3_Updated_Req unchanged
+
     market is already uppercased by the caller.
     """
     candidates = [stage3_val]
 
     if market == "OE":
-        avg = avg_sales.get((sku, "OE"))
-        oe  = oe_demand.get(sku)
-        if avg is not None:
-            candidates.append(avg)
+        # OE: use oe_demand only — NOT avg_sales
+        oe = oe_demand.get(sku)
         if oe is not None:
             candidates.append(oe)
 
     elif market == "RE":
+        # RE: use avg_sales only — Ghost SKUs in oe_demand already corrected to OE by Stage 3
         avg = avg_sales.get((sku, "RE"))
         if avg is not None:
             candidates.append(avg)
@@ -209,14 +216,21 @@ def run_stage4():
     print(f"\n  'Updated_Requirement' is column index {upd_col_idx} "
           f"(Excel col {chr(65 + upd_col_idx) if upd_col_idx < 26 else chr(64 + upd_col_idx // 26) + chr(65 + upd_col_idx % 26)})")
 
-    changed = 0
+    changed  = 0
+    skipped_manual = 0
     for i, row in df.iterrows():
         sku        = str(row["SKUCode"]).strip()
         market     = str(row["Market"]).strip().upper()
+        source     = str(row.get("Source", "Automated")).strip()
         stage3_val = pd.to_numeric(row["Updated_Requirement"], errors="coerce")
 
         if pd.isna(stage3_val):
             stage3_val = 0.0
+
+        # --- Frontend (Manual) SKUs: keep Updated_Requirement exactly as Stage 3 ---
+        if source.lower() == "manual":
+            skipped_manual += 1
+            continue
 
         new_val = _compute_updated_req(stage3_val, sku, market, avg_sales, oe_demand)
 
@@ -224,8 +238,27 @@ def run_stage4():
             df.at[i, "Updated_Requirement"] = new_val
             changed += 1
 
-    print(f"  Rows updated (value changed from Stage 3): {changed}")
-    print(f"  Rows unchanged                            : {len(df) - changed}")
+    print(f"  Manual (frontend) SKUs — kept unchanged : {skipped_manual}")
+    print(f"  Automated SKUs updated (value changed)  : {changed}")
+    print(f"  Automated SKUs unchanged                : {len(df) - changed - skipped_manual}")
+
+    # --- Add reference columns: oe_demand_qty and avg_sales_qty ---
+    # These are informational columns appended at the end (AJ, AK)
+    def _get_oe_qty(row):
+        sku = str(row["SKUCode"]).strip().upper()
+        val = oe_demand.get(sku)
+        return val if val is not None else 0
+
+    def _get_avg_sales_qty(row):
+        sku = str(row["SKUCode"]).strip().upper()
+        mkt = str(row["Market"]).strip().upper()
+        # Try market-specific first, then any market for this SKU
+        val = avg_sales.get((sku, mkt))
+        return round(val, 1) if val is not None else 0
+
+    df["oe_demand_qty"]  = df.apply(_get_oe_qty, axis=1)
+    df["avg_sales_qty"]  = df.apply(_get_avg_sales_qty, axis=1)
+    print(f"\n  Added columns: 'oe_demand_qty' (AJ), 'avg_sales_qty' (AK)")
 
     # --- Write output — same structure, same sheets ---
     out_file = f"vector_stage4_running_demand_{ddmmyyyy}.xlsx"
@@ -242,7 +275,7 @@ def run_stage4():
             print(f"  [Copied unchanged] Sheet: '{sheet}'")
 
     print(f"\n✅ Stage 4 complete: {out_file}")
-    print(f"   Columns        : {len(df.columns)}  (identical to Stage 3)")
+    print(f"   Columns        : {len(df.columns)}  (Stage 3 cols + oe_demand_qty + avg_sales_qty)")
     print(f"   Rows           : {len(df)}")
     print(f"   Updated_Req col: index {upd_col_idx} (unchanged position)")
 

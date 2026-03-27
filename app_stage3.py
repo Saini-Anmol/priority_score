@@ -8,6 +8,7 @@
 #
 # Output: vector_frontend_running_demand_<DDMMYYYY>.xlsx  (date-wise sheet tabs)
 
+import os
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -116,6 +117,27 @@ def run_hybrid_analysis():
             print(f"[OUTPUT] Yield factor applied — Updated_Requirement column added")
         else:
             print("[OUTPUT] Skipping yield factor (Requirement or Market column missing)")
+
+        # ====================================================================
+        # GHOST SKU MARKET CORRECTION
+        # Reassign Ghost SKUs from default 'RE' to 'OE' if they appear in oe_demand.csv.
+        # This ensures Stage 4 applies OE logic (max(Stage3, oe_demand)) for them.
+        # ====================================================================
+        oe_demand_path = os.path.join(config.BASE_DATA_PATH, "oe_demand.csv")
+        if os.path.exists(oe_demand_path) and "IsGhostSKU" in hybrid_df.columns:
+            try:
+                _oe_df = pd.read_csv(oe_demand_path, skiprows=2, header=0, encoding="latin1")
+                _oe_skus = set(_oe_df["PRODUCT CODE"].astype(str).str.strip().str.upper())
+                ghost_oe_mask = (
+                    hybrid_df["IsGhostSKU"].fillna(False).astype(bool) &
+                    hybrid_df["SKUCode"].astype(str).str.strip().str.upper().isin(_oe_skus)
+                )
+                n_corrected = ghost_oe_mask.sum()
+                if n_corrected > 0:
+                    hybrid_df.loc[ghost_oe_mask, "Market"] = "OE"
+                    print(f"[OUTPUT] Ghost SKU market corrected RE→OE for {n_corrected} SKU(s) found in oe_demand.csv")
+            except Exception as _e:
+                print(f"[WARN] Could not apply Ghost SKU OE correction: {_e}")
 
 
         desc_lookup: dict = {}
