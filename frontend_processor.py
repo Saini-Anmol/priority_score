@@ -255,7 +255,7 @@ def _build_manual_rows(
     # Manual SKUs always show 100% penetration (they are actively demanded)
     rows["Penetration"]        = 100.0
 
-    rows["Source"] = "Manual"
+    rows["Source"] = "CPT"
 
     # ConsolidatedPriorityScore alias for downstream consumers (same value)
     rows["ConsolidatedPriorityScore"] = manual_df["StrategicPriorityScore"]
@@ -287,7 +287,7 @@ def process_frontend_override(stage1_df: pd.DataFrame, date_str: str) -> pd.Data
     # ── Helper: automated-only path ──────────────────────────────────────────
     def _automated_only(df):
         df = df.copy()
-        df["Source"]                      = "Automated"
+        df["Source"]                      = "Vector"
         req                               = "Requirement"
         df["Vector_Requirement"]          = df[req] if req in df.columns else 0
         df["CPT_Requirement"]             = 0
@@ -380,7 +380,7 @@ def process_frontend_override(stage1_df: pd.DataFrame, date_str: str) -> pd.Data
     if n_kept_both > 0:
         print(f"[STAGE 2] Kept {n_kept_both} (SKU, Market) pair(s) as both Automated + Manual (same demand qty)")
 
-    auto_df["Source"]             = "Automated"
+    auto_df["Source"]             = "Vector"
     auto_df["Vector_Requirement"] = auto_df[req_col] if req_col in auto_df.columns else 0
     auto_df["CPT_Requirement"]    = 0
     # For automated rows, ConsolidationPriorityScore is the ConsolidatedPriorityScore from Stage 1

@@ -59,17 +59,25 @@ def clean_mould_report(date_str):
         # Group by SKUCode to handle machines with RH/LH sides
         # WCNAME represents the physical machine, but we count per SKU
         # Each WCNAME+Side combination is one production unit, so we count unique WCNAME values
-        mould_summary = mould_df.groupby('Sapcode').agg({
-            'WCNAME': 'nunique',  # Count unique machines running this SKU
+        agg_rules = {
+            'WCNAME': 'nunique',   # Count unique machines running this SKU
             'MouldHealth': 'mean'  # Average mould health across all machines
-        }).reset_index()
+        }
+        if 'Recipe' in mould_df.columns:
+            agg_rules['Recipe'] = 'first'
+            
+        mould_summary = mould_df.groupby('Sapcode').agg(agg_rules).reset_index()
         
         # Rename columns for clarity
-        mould_summary.rename(columns={
+        rename_map = {
             'Sapcode': 'SKUCode',
             'WCNAME': 'MachineCount',
             'MouldHealth': 'AvgMouldHealth'
-        }, inplace=True)
+        }
+        if 'Recipe' in mould_summary.columns:
+            rename_map['Recipe'] = 'Mould_Recipe'
+            
+        mould_summary.rename(columns=rename_map, inplace=True)
         
         return mould_summary
     
@@ -111,6 +119,8 @@ def _build_ghost_sku_rows(mould_df: pd.DataFrame, demand_df: pd.DataFrame) -> pd
 
     ghost_rows = pd.DataFrame()
     ghost_rows['SKUCode']                    = ghost_mould['SKUCode'].values
+    if 'Mould_Recipe' in ghost_mould.columns:
+        ghost_rows['SKU Description']        = ghost_mould['Mould_Recipe'].values
     ghost_rows['size']                       = pd.to_numeric(
         ghost_mould['SKUCode'].str[8:10], errors='coerce').fillna(0).astype('Int64').values
     ghost_rows['Market']                     = GHOST_SKU_MARKET
@@ -157,6 +167,14 @@ def merge_demand_with_deployment(demand_df, mould_df):
     merged_df = demand_df.merge(mould_df, on='SKUCode', how='left')
     merged_df['MachineCount']  = merged_df['MachineCount'].fillna(0).astype(int)
     merged_df['AvgMouldHealth']= merged_df['AvgMouldHealth'].fillna(0)
+
+    # Overwrite SKU description with Recipe from daily mould report if available
+    if 'Mould_Recipe' in merged_df.columns:
+        has_recipe = merged_df['Mould_Recipe'].notna()
+        if 'SKU Description' not in merged_df.columns:
+            merged_df['SKU Description'] = np.nan
+        merged_df.loc[has_recipe, 'SKU Description'] = merged_df.loc[has_recipe, 'Mould_Recipe']
+        merged_df.drop(columns=['Mould_Recipe'], inplace=True)
 
     # Append Ghost SKU rows (full outer join — right-side orphans)
     ghost_df = _build_ghost_sku_rows(mould_df, demand_df)
@@ -325,8 +343,10 @@ def process_deployment_analysis(demand_df, date_str):
         'ASP', 'Cure Time', 'daily_cure', 'rev_pot', 'price_priority',
 
         # --- Group 8: Scoring & Ranking ---
+        'InventoryScore', 'PriceScore',      # renamed equivalents (Stage 1 output names)
         'PriorityScore',
         'ConsolidatedPriorityScore', 'Rank_ConsolidatedPriorityScore',
+
     ]
 
     # Only include columns that actually exist in this run

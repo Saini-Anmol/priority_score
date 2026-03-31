@@ -280,7 +280,12 @@ def process_single_date(date_str):
     bor_v = bor_v.merge(bpr_v[['SKUCode', 'Location Code', 'Top SKU']], on=['SKUCode', 'Location Code'], how='left')
 
     bmr_v.columns = bmr_v.iloc[0]; bmr_v = bmr_v.drop(index=0).reset_index(drop=True)
-    bmr_v = bmr_v[bmr_v['Plant Code'] == '1300'].rename(columns={'Item Code': 'SKUCode', 'Pending CCR Qty': 'Requirement', 'BPP': 'Penetration'})
+    bmr_v = bmr_v[bmr_v['Plant Code'] == '1300'].rename(columns={
+        'Item Code':        'SKUCode',
+        'Item Description': 'SKU Description',
+        'Pending CCR Qty':  'Requirement',
+        'BPP':              'Penetration',
+    })
     bmr_v['SKUCode'] = bmr_v['SKUCode'].astype(str)  # Ensure string type
     bmr_v['Market'], bmr_v['Top SKU'] = 'EXP', 'T'
     
@@ -317,7 +322,8 @@ def process_single_date(date_str):
     )
 
     # --- REVENUE & EFFICIENCY (Dispatch & Curing) ---
-    combined = combined.merge(pivoted[['SKUCode', 'InventoryScore']], on='SKUCode', how='left').fillna(0)
+    combined = combined.merge(pivoted[['SKUCode', 'InventoryScore']], on='SKUCode', how='left')
+    combined['InventoryScore'] = combined['InventoryScore'].fillna(0)  # only fill the joined column
     combined['NormInventoryScore'] = _minmax(combined['InventoryScore'])
 
     dispatch = pd.read_csv(f"{config.BASE_DATA_PATH}/DISPATCH1.csv", encoding='ISO-8859-1')

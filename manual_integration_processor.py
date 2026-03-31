@@ -286,7 +286,7 @@ def _build_manual_rows(
     manual_rows["MouldAlert"]          = manual_df["AvgMouldHealth"] > 0.9
 
     # --- Source tag ---
-    manual_rows["Source"]              = "Manual"
+    manual_rows["Source"]              = "CPT"
 
     # ProxyRank for manual entries = manual_rank (occupies top N positions)
     manual_rows["ProxyRank"]           = manual_df["manual_rank"]
@@ -321,7 +321,7 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
     # ── Helper: automated-only path ──────────────────────────────────────────
     def _automated_only(df):
         df = df.copy()
-        df["Source"]           = "Automated"
+        df["Source"]           = "Vector"
         req                    = "Requirement"
         df["Vector_Requirement"] = df[req] if req in df.columns else 0
         df["CPT_Requirement"]  = 0
@@ -398,7 +398,7 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
         print(f"[STAGE 3] Removed {n_superseded} automated row(s) superseded by manual entries")
 
     # Tag automated rows
-    auto_df["Source"]                     = "Automated"
+    auto_df["Source"]                     = "Vector"
     auto_df["Vector_Requirement"]         = auto_df[req_col] if req_col in auto_df.columns else 0
     auto_df["CPT_Requirement"]            = 0
     auto_df["ConsolidationPriorityScore"] = pd.to_numeric(

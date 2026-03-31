@@ -181,3 +181,11 @@ HISTORY_PENETRATION_BLACK = float(_get("HISTORY_PENETRATION_BLACK"))
 EFFICIENCY_FACTOR  = float(_get("EFFICIENCY_FACTOR"))
 DEFAULT_ASP        = int(_get("DEFAULT_ASP"))
 DEFAULT_CURE_TIME  = int(_get("DEFAULT_CURE_TIME"))
+
+# ---------------------------------------------------------------------------
+# 12. YIELD FACTOR  (Stage 5 — quality-adjusted production quantity)
+# Applied only to OE and EXP markets.
+# Stage 5: Updated_Requirement = ceil(Updated_Requirement / YIELD_FACTOR)
+# Default: 0.95 (95% yield — 5% of production is expected to be sub-quality)
+# ---------------------------------------------------------------------------
+YIELD_FACTOR = YIELD_FACTORS.get("OE", 0.95)   # same value used for both OE and EXP
