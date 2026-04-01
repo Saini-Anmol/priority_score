@@ -70,7 +70,7 @@ def _load_manual_data() -> pd.DataFrame:
     df["HighestPriority"] = pd.to_numeric(df["HighestPriority"], errors="coerce").fillna(0).astype(int)
 
     if "Target Date" in df.columns:
-        df["Target Date"] = pd.to_datetime(df["Target Date"], errors="coerce").dt.date.fillna(_TODAY)
+        df["Target Date"] = pd.to_datetime(df["Target Date"], errors="coerce", dayfirst=True).dt.date.fillna(_TODAY)
     else:
         df["Target Date"] = _TODAY
 
@@ -143,7 +143,7 @@ def _compute_weighted_score(df: pd.DataFrame, max_auto: float) -> pd.DataFrame:
         config_stage2.W_MARKET      * norm_market +
         config_stage2.W_QTY         * norm_qty    +
         config_stage2.W_TARGET_DATE * norm_date
-    ).round(6)
+    ).round(2)
 
     # ── Step 2 & 3: modified_priority_score ───────────────────────────────────
     max_ws        = df["weighted_score"].max()
@@ -162,7 +162,7 @@ def _compute_weighted_score(df: pd.DataFrame, max_auto: float) -> pd.DataFrame:
         )
         df.loc[hp1_idx, "modified_priority_score"] = (
             max_ws * (1.0 + df.loc[hp1_idx, "priority_rank"] / P)
-        ).round(6)
+        ).round(2)
 
     # ── Step 4: ConsolidationPriorityScore ────────────────────────────────────
     # overall_rank: 1 = lowest modified_priority_score, N = highest (most urgent)
@@ -173,7 +173,7 @@ def _compute_weighted_score(df: pd.DataFrame, max_auto: float) -> pd.DataFrame:
     )
     df["ConsolidationPriorityScore"] = (
         max_auto * (1.0 + df["overall_rank"] / N)
-    ).round(6)
+    ).round(2)
 
     # manual_rank: rank within the manual block, 1 = most urgent
     df["manual_rank"] = (
@@ -325,6 +325,18 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
         req                    = "Requirement"
         df["Vector_Requirement"] = df[req] if req in df.columns else 0
         df["CPT_Requirement"]  = 0
+
+        # Ensure manual-related columns always exist (database schema requirement)
+        df["HighestPriority"]             = 0
+        df["Target Date"]                 = ""
+        df["Quantity"]                    = 0
+        df["weighted_score"]              = 0.0
+        df["modified_priority_score"]     = 0.0
+        df["manual_rank"]                 = 0
+        df["ConsolidationPriorityScore"]  = pd.to_numeric(
+            df.get("ConsolidatedPriorityScore", 0), errors="coerce"
+        ).fillna(0)
+
         df = df.sort_values("ConsolidatedPriorityScore", ascending=False).reset_index(drop=True)
         df["Final Rank"]       = df.index + 1
         return _select_output_columns(df)
@@ -430,7 +442,7 @@ def process_manual_override(stage2_df: pd.DataFrame, date_str: str) -> pd.DataFr
     ]
     for col in _NUMERIC_FILL_ZERO:
         if col in hybrid_df.columns:
-            hybrid_df[col] = pd.to_numeric(hybrid_df[col], errors='coerce').fillna(0)
+            hybrid_df[col] = pd.to_numeric(hybrid_df[col], errors='coerce').fillna(0).round(2)
 
     for col in ['SKU Description', 'Source', 'Target Date']:
         if col in hybrid_df.columns:
@@ -497,6 +509,7 @@ def _select_output_columns(df: pd.DataFrame) -> pd.DataFrame:
         'Stock',
         'Vector_Requirement', 'CPT_Requirement',
         'Requirement', 'Updated_Requirement',
+        'avg_sales_qty', 'oe_demand_qty',
         'Penetration', 'NormPenetration', 'NormRequirement',
 
         # X–Z — SKU Attributes

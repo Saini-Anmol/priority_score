@@ -8,13 +8,12 @@
 #   Writes: vector_stage3_DDMMYYYY.xlsx
 #
 # Adds columns:
-#   Updated_Requirement = max(ref_data, Requirement) per market rule:
-#       OE  → max(oe_demand[sku],     Requirement)
-#       RE  → max(avg_sales[(sku,RE)], Requirement)
-#       EXP → max(avg_sales[(sku,EXP)], Requirement)
-#       Others → Requirement unchanged
+#   Updated_Requirement per market rule:
+#       OE  → max(oe_demand[sku] - stock, base_req - stock)
+#       RE  → max(avg_sales[(sku,RE)] - stock, base_req - stock)
+#       Others (EXP, Govt, etc.) → base_req (vector requirement) unchanged
 #   oe_demand_qty  — lookup value used for OE comparison
-#   avg_sales_qty  — lookup value used for RE/EXP comparison
+#   avg_sales_qty  — lookup value used for RE comparison
 
 import os
 import math
@@ -102,30 +101,24 @@ def _load_oe_demand() -> dict:
 # CORE LOGIC
 # ---------------------------------------------------------------------------
 
-def _compute_req(base_req: float, sku: str, market: str,
+def _compute_req(base_req: float, stock: float, sku: str, market: str,
                  avg_sales: dict, oe_demand: dict) -> int:
     """
-    OE  → max(oe_demand[sku], base_req)
-    RE  → max(avg_sales[(sku,RE)], base_req)
-    EXP → max(avg_sales[(sku,EXP)], base_req)
-    Others → base_req unchanged
+    OE  → max(oe_demand[sku] - stock, base_req - stock)
+    RE  → max(avg_sales[(sku,RE)] - stock, base_req - stock)
+    Others (EXP, Govt, etc.) → base_req unchanged (vector requirement)
+
+    All results are floored at 0 (never negative).
     """
-    candidates = [base_req]
-
     if market == 'OE':
-        oe = oe_demand.get(sku)
-        if oe is not None:
-            candidates.append(oe)
+        oe = oe_demand.get(sku, 0)
+        return max(0, math.ceil(max(oe - stock, base_req - stock)))
     elif market == 'RE':
-        avg = avg_sales.get((sku, 'RE'))
-        if avg is not None:
-            candidates.append(avg)
-    elif market == 'EXP':
-        avg = avg_sales.get((sku, 'EXP'))
-        if avg is not None:
-            candidates.append(avg)
-
-    return math.ceil(max(candidates))
+        avg = avg_sales.get((sku, 'RE'), 0)
+        return max(0, math.ceil(max(avg - stock, base_req - stock)))
+    else:
+        # EXP, Govt, and all other markets → vector requirement unchanged
+        return math.ceil(base_req)
 
 
 # ---------------------------------------------------------------------------
@@ -186,13 +179,16 @@ def run_stage3():
         sku    = str(row['SKUCode']).strip().upper()
         market = str(row['Market']).strip().upper()
         req    = pd.to_numeric(row.get('Requirement', 0), errors='coerce')
+        stock  = pd.to_numeric(row.get('Stock', 0), errors='coerce')
         if pd.isna(req):
             req = 0.0
+        if pd.isna(stock):
+            stock = 0.0
 
         oe_val  = oe_demand.get(sku, 0)
         avg_val = avg_sales.get((sku, market), 0)
 
-        updated_reqs.append(_compute_req(req, sku, market, avg_sales, oe_demand))
+        updated_reqs.append(_compute_req(req, stock, sku, market, avg_sales, oe_demand))
         oe_qty_col.append(oe_val)
         avg_qty_col.append(round(avg_val, 1))
 

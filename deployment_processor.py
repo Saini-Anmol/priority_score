@@ -67,6 +67,8 @@ def clean_mould_report(date_str):
             agg_rules['Recipe'] = 'first'
             
         mould_summary = mould_df.groupby('Sapcode').agg(agg_rules).reset_index()
+        mould_summary['MouldHealth'] = mould_summary['MouldHealth'].round(2)
+
         
         # Rename columns for clarity
         rename_map = {
@@ -204,8 +206,8 @@ def calculate_proxy_penetration(df):
     # Ensure penalty doesn't go negative
     penalty_factor = penalty_factor.clip(lower=0)
     
-    # Calculate Proxy Penetration
-    df['ProxyPenetration'] = df['ConsolidatedPriorityScore'] * penalty_factor
+    # Calculate Proxy Penetration (rounded to 2 decimal places)
+    df['ProxyPenetration'] = (df['ConsolidatedPriorityScore'] * penalty_factor).round(2)
     
     # Create new ranking based on Proxy Penetration
     df['ProxyRank'] = df['ProxyPenetration'].rank(ascending=False, method='min').astype(int)

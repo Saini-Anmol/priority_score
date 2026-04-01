@@ -92,6 +92,16 @@ def run_stage4():
         print(f'  [WARN] {e}')
         print('  No manual demand file found — using Stage 3 output as-is.')
         hybrid_df = df.copy()
+        # Ensure manual-related columns always exist (database schema requirement)
+        hybrid_df['Source']                     = 'Vector'
+        hybrid_df['Vector_Requirement']         = hybrid_df.get('Requirement', 0)
+        hybrid_df['CPT_Requirement']            = 0
+        hybrid_df['HighestPriority']            = 0
+        hybrid_df['Target Date']                = ''
+        hybrid_df['Quantity']                   = 0
+        hybrid_df['weighted_score']             = 0.0
+        hybrid_df['modified_priority_score']    = 0.0
+        hybrid_df['manual_rank']                = 0
 
     # ── CPT_Requirement: backend for frontend qty already set by processor,
     #    but ensure Updated_Requirement = CPT_Requirement for Manual SKUs ────

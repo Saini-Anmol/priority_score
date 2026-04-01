@@ -400,16 +400,20 @@ def process_single_date(date_str):
     # Sort by consolidated rank
     combined = combined.sort_values(by='Rank_ConsolidatedPriorityScore', ascending=True)
 
-    # --- ROUNDING ---
-    # Penetration: 2 decimal places
+    # Penetration & ASP: 2 decimal places
+    combined['Penetration'] = pd.to_numeric(combined['Penetration'], errors='coerce')
     combined['Penetration'] = combined['Penetration'].round(2)
-    # All score columns: 3 decimal places
+    if 'ASP' in combined.columns:
+        combined['ASP'] = pd.to_numeric(combined['ASP'], errors='coerce').round(2)
+    
+    # All score columns: 2 decimal places
     for _score_col in [
         'PriorityScore', 'PriceScore',
         'ConsolidatedPriorityScore',
     ]:
         if _score_col in combined.columns:
-            combined[_score_col] = combined[_score_col].round(3)
+            combined[_score_col] = pd.to_numeric(combined[_score_col], errors='coerce')
+            combined[_score_col] = combined[_score_col].round(2)
 
     # SELECT ONLY REQUIRED COLUMNS (matching original output)
     # Columns ordered to tell a clear left-to-right story:
