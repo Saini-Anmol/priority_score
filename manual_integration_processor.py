@@ -276,6 +276,11 @@ def _build_manual_rows(
     # Ghost SKU flag: manual entries are always real demand
     manual_rows["IsGhostSKU"]          = False
 
+    # --- CPT Defaults ---
+    manual_rows["Cure Time"]           = 20
+    manual_rows["avg_sales_qty"]       = 0.0
+    manual_rows["oe_demand_qty"]       = 0.0
+
     # --- Deployment metrics (from Stage 2 join) ---
     manual_rows["MachineCount"]        = manual_df["MachineCount"]
     manual_rows["AvgMouldHealth"]      = manual_df["AvgMouldHealth"]
