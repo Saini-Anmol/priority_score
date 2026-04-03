@@ -86,12 +86,12 @@ def run_btp_pipeline(ddmmyyyy: str):
         main_sheet_name=ddmmyyyy
     )
 
-    # FINAL OUTPUT 2: Upload to MySQL Database
-    # This uploads the exact same 'final_df' to the cloud!
-    # ---------------------------------------------------------
-    if db_engine:
-        upload_dataframe_to_sql(
-            df=final_df, 
-            table_name="btp_requirement",  
-            engine=db_engine
-        )
+    # # FINAL OUTPUT 2: Upload to MySQL Database
+    # # This uploads the exact same 'final_df' to the cloud!
+    # # ---------------------------------------------------------
+    # if db_engine:
+    #     upload_dataframe_to_sql(
+    #         df=final_df, 
+    #         table_name="btp_requirement",  
+    #         engine=db_engine
+    #     )

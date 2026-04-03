@@ -2,17 +2,17 @@
 # ---------------------------------------------------------------------------
 # DATABASE UPLOAD UTILITY
 # Handles cleaning and uploading Pandas DataFrames into the pre-existing
-# MySQL table.  Uses DELETE + INSERT so the table schema is never dropped.
+# MySQL table.  Uses TRUNCATE + INSERT so the table schema is never dropped.
 # ---------------------------------------------------------------------------
 
 import pandas as pd
+from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 
 # ── Column mapping: DataFrame column name → DB column name ───────────────
-# This maps the 37-column Stage 5 output to the btp_requirement schema.
-# Only columns listed here will be uploaded. Order does not matter.
+# Matches the jkplanningV1.btp_requirement schema EXACTLY.
 _COLUMN_MAP = {
     "Final Rank":                "finalRank",
     "SKUCode":                   "skuCode",
@@ -30,24 +30,24 @@ _COLUMN_MAP = {
     "Virtual Norm":              "virtualNorm",
     "Adjusted_Target":           "adjustedTarget",
     "Stock":                     "stock",
+    "avg_sales_qty":             "avgSalesQty",
+    "oe_demand_qty":             "oePlanQty",
     "Vector_Requirement":        "vectorRequirement",
     "CPT_Requirement":           "cptRequirement",
     "Requirement":               "requirement",
-    "Updated_Requirement":       "updatedRequirement",
-    "avg_sales_qty":             "avgSalesQty",
-    "oe_demand_qty":             "oeDemandQty",
+    "Updated_Requirement":       "finalRequirement",
     "Penetration":               "penetration",
-    "TopSKUFlag":                "topSKUFlag",
+    "TopSKUFlag":                "topSkuFlag",
     "HistoryPenetrationScore":   "historyPenetrationScore",
     "MachineCount":              "machineCount",
     "AvgMouldHealth":            "avgMouldHealth",
-    "ProxyPenetration":          "proxyPenetration",
+    "ProxyPenetration":          "proxyMachineScore",
     "ProxyRank":                 "proxyRank",
     "CriticalGap":               "criticalGap",
     "ExcessProduction":          "excessProduction",
     "MouldAlert":                "mouldAlert",
-    "IsGhostSKU":                "isGhostSKU",
-    "ASP":                       "asp",
+    "IsGhostSKU":                "isGhostSku",
+    "ASP":                       "avgSellingPrice",
     "Cure Time":                 "cureTime",
     "PriorityScore":             "priorityScore",
     "ConsolidatedPriorityScore": "consolidatedPriorityScore",
@@ -58,13 +58,8 @@ def upload_dataframe_to_sql(df: pd.DataFrame, table_name: str, engine: Engine):
     """
     Uploads a DataFrame to the pre-existing MySQL table.
 
-    Strategy:  DELETE all existing rows  →  INSERT new rows.
+    Strategy:  TRUNCATE (clear all rows + reset id)  →  INSERT new rows.
     The table schema is NEVER dropped or recreated.
-
-    Args:
-        df:         The pandas DataFrame to upload.
-        table_name: The target table in the MySQL database.
-        engine:     The active SQLAlchemy connection engine.
     """
     if engine is None:
         print(f"  [ERROR] Cannot upload to '{table_name}' — No active database connection.")
@@ -76,18 +71,39 @@ def upload_dataframe_to_sql(df: pd.DataFrame, table_name: str, engine: Engine):
     upload_df = upload_df[[c for c in _COLUMN_MAP if c in upload_df.columns]]
     upload_df = upload_df.rename(columns=rename_map)
 
+    # 2. Drop 'id' column if it exists — id is auto-increment primary key in DB
+    if 'id' in upload_df.columns:
+        upload_df.drop(columns=['id'], inplace=True)
+
+    # 3. Data type cleaning for MySQL compatibility
+    #    targetDate: empty string '' → None (DB expects DATE or NULL, not '')
+    if 'targetDate' in upload_df.columns:
+        upload_df['targetDate'] = upload_df['targetDate'].apply(
+            lambda x: None if (pd.isna(x) or str(x).strip() == '') else x
+        )
+
+    #    BIT columns: True/False → 1/0 (MySQL BIT doesn't accept Python booleans)
+    for bit_col in ['criticalGap', 'excessProduction', 'mouldAlert', 'isGhostSku', 'topSkuFlag']:
+        if bit_col in upload_df.columns:
+            upload_df[bit_col] = upload_df[bit_col].apply(
+                lambda x: int(bool(x)) if pd.notna(x) else 0
+            )
+
+    # 4. Add createdAt (full date + time) and createdBy ("AI Plan")
+    upload_df["createdAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    upload_df["createdBy"] = "AI Plan"
+
     print(f"  [DB Upload] Preparing to upload {len(upload_df)} rows to table '{table_name}'...")
     print(f"              Columns mapped: {len(rename_map)} / {len(_COLUMN_MAP)}")
 
     try:
-        # 2. DELETE all existing rows (preserves schema + id auto-increment)
+        # 4. TRUNCATE table — clears all rows and resets auto-increment id
         with engine.connect() as conn:
-            conn.execute(text(f"DELETE FROM {table_name}"))
+            conn.execute(text(f"TRUNCATE TABLE {table_name}"))
             conn.commit()
-        print(f"  [DB Upload] Cleared old rows from '{table_name}'.")
+        print(f"  [DB Upload] Truncated table '{table_name}' (old rows cleared, id reset).")
 
-        # 3. INSERT new rows using pandas to_sql with 'append' mode
-        #    'append' = INSERT only, never touches the table structure
+        # 5. INSERT new rows using pandas to_sql with 'append' mode
         upload_df.to_sql(
             name=table_name,
             con=engine,
