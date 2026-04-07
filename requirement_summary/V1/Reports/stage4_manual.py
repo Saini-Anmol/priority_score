@@ -16,6 +16,7 @@ import numpy as np
 # Import configuration and utilities
 import V1.Setups.config as config
 from V1.Utilities.math_utils import minmax_normalize, extract_rim_size
+from V1.Utilities.data_loaders import load_avg_sales, load_oe_demand
 
 _TODAY = datetime.now().date()
 
@@ -148,8 +149,17 @@ def _build_manual_rows(manual_df: pd.DataFrame, stage3_df: pd.DataFrame, vector_
     manual_rows["Penetration"]        = 100.0
     manual_rows["IsGhostSKU"]         = False
     manual_rows["Cure Time"]          = 20
-    manual_rows["avg_sales_qty"]      = 0.0
-    manual_rows["oe_demand_qty"]      = 0.0
+    # Look up real values from reference files (not hardcoded 0)
+    avg_sales = load_avg_sales()
+    oe_demand = load_oe_demand()
+    manual_rows["avg_sales_qty"] = [
+        round(avg_sales.get((str(sku).strip().upper(), str(mkt).strip().upper()), 0), 1)
+        for sku, mkt in zip(manual_df["SKUCode"], manual_df["Market"])
+    ]
+    manual_rows["oe_demand_qty"] = [
+        oe_demand.get(str(sku).strip().upper(), 0)
+        for sku in manual_df["SKUCode"]
+    ]
     
     manual_rows["MachineCount"]       = manual_df["MachineCount"]
     manual_rows["AvgMouldHealth"]     = manual_df["AvgMouldHealth"]

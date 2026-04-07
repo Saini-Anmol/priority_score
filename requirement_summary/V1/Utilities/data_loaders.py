@@ -47,7 +47,7 @@ def load_avg_sales() -> dict:
     # Detect columns dynamically by partial name match (robust to minor name changes)
     sku_col = next((c for c in df.columns if 'code' in c.lower() or 'sku' in c.lower()), None)
     mkt_col = next((c for c in df.columns if c.lower() == 'market'), None)
-    qty_col = next((c for c in df.columns if 'avg' in c.lower() or 'sale' in c.lower() or 'qty' in c.lower()), None)
+    qty_col = next((c for c in df.columns if 'avg' in c.lower() or 'sales' in c.lower() or 'qty' in c.lower()), None)
 
     if not all([sku_col, mkt_col, qty_col]):
         print(f'  [WARN] avg_sales.csv: missing columns (sku={sku_col}, mkt={mkt_col}, qty={qty_col})')

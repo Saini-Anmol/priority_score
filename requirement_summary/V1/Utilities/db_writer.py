@@ -76,11 +76,9 @@ def upload_dataframe_to_sql(df: pd.DataFrame, table_name: str, engine: Engine):
         upload_df.drop(columns=['id'], inplace=True)
 
     # 3. Data type cleaning for MySQL compatibility
-    #    targetDate: empty string '' → None (DB expects DATE or NULL, not '')
+    #    targetDate: empty string '' → pd.NaT (which SQLAlchemy converts to SQL NULL safely)
     if 'targetDate' in upload_df.columns:
-        upload_df['targetDate'] = upload_df['targetDate'].apply(
-            lambda x: None if (pd.isna(x) or str(x).strip() == '') else x
-        )
+        upload_df['targetDate'] = pd.to_datetime(upload_df['targetDate'], errors='coerce')
 
     #    BIT columns: True/False → 1/0 (MySQL BIT doesn't accept Python booleans)
     for bit_col in ['criticalGap', 'excessProduction', 'mouldAlert', 'isGhostSku', 'topSkuFlag']:
