@@ -112,7 +112,7 @@ def _select_output_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df[[c for c in output_columns if c in df.columns]]
 
 
-def _process_one_type(df: pd.DataFrame, date_str: str, tyre_type: str) -> pd.DataFrame:
+def _process_one_type(engine, df: pd.DataFrame, date_str: str, tyre_type: str) -> pd.DataFrame:
     """
     Apply Stage 3 deployment analysis to one tyre type DataFrame.
 
@@ -136,7 +136,7 @@ def _process_one_type(df: pd.DataFrame, date_str: str, tyre_type: str) -> pd.Dat
             df["ConsolidatedPriorityScore"] = 0.0
 
     # ── Deployment analysis (mould report) ────────────────────────────────────
-    mould_df = clean_mould_report_ctp(tyre_type, date_str)   # reads from CTP mould report path
+    mould_df = clean_mould_report_ctp(engine, tyre_type, date_str)   # reads from CTP mould report path
 
     if mould_df is not None:
         print(f"  [MOULD] Found {len(mould_df)} SKUs in mould report")
@@ -197,7 +197,7 @@ def _process_one_type(df: pd.DataFrame, date_str: str, tyre_type: str) -> pd.Dat
 # RUNNER
 # ---------------------------------------------------------------------------
 
-def run_ctp_stage3():
+def run_ctp_stage3(engine):
     print("=" * 70)
     print("  CTP SUPPLY CHAIN INTELLIGENCE — Stage 3")
     print("  Machine Deployment Analysis & Gap Flags")
@@ -243,8 +243,8 @@ def run_ctp_stage3():
     print(f"  TBR sheet '{tbr_sheet}': {len(tbr_df)} rows")
 
     # ── Run Stage 3 per tyre type ─────────────────────────────────────────────
-    pcr_final = _process_one_type(pcr_df, ddmmyyyy, "PCR") if not pcr_df.empty else pd.DataFrame()
-    tbr_final = _process_one_type(tbr_df, ddmmyyyy, "TBR") if not tbr_df.empty else pd.DataFrame()
+    pcr_final = _process_one_type(engine, pcr_df, ddmmyyyy, "PCR") if not pcr_df.empty else pd.DataFrame()
+    tbr_final = _process_one_type(engine, tbr_df, ddmmyyyy, "TBR") if not tbr_df.empty else pd.DataFrame()
 
     # ── History BOR tabs (same as BTP) ───────────────────────────────────────
     n_days = config.HISTORY_PENETRATION_N
@@ -324,5 +324,21 @@ def run_ctp_stage3():
 # ---------------------------------------------------------------------------
 # ENTRY POINT
 # ---------------------------------------------------------------------------
+# --- MySQL Connection ---
+from sqlalchemy import create_engine
+
+server = "35.208.174.2"
+database = "jkplanning_CTP"
+username = "root"
+password = "Dev112233"
+
+engine = create_engine(f'mysql+pymysql://{username}:{password}@{server}/{database}')
+
+try:
+    with engine.connect() as connection:
+        print("Connection successful!")
+except Exception as e:
+    print(f"Connection failed: {e}")
+
 if __name__ == "__main__":
-    run_ctp_stage3()
+    run_ctp_stage3(engine)

@@ -267,11 +267,13 @@ def process_single_date(date_str: str):
 
     # --- FILE PATHS (same raw files as BTP) ---
     # SPOR is optional for CTP — we include it in the check only if present
-    file_bor  = (f'{config.BASE_DATA_PATH}/Vectordata/BOR/'
+    # file_bor  = (f'{requirement_summary/config.BASE_DATA_PATH}/Vectordata/BOR/'
+    #          f'BORColorBandwiseReport__{date.strftime("%d-%m-%Y")}.csv')
+    file_bor  = (f'requirement_summary/data/Vectordata/BOR/'
                  f'BORColorBandwiseReport__{date.strftime("%d-%m-%Y")}.csv')
-    file_bmr  = (f'{config.BASE_DATA_PATH}/Vectordata/BMR/'
+    file_bmr  = (f'requirement_summary/data/Vectordata/BMR/'
                  f'Prod_OverAll_BMReport__{date.strftime("%d_%m_%Y")}.xlsx')
-    file_bpr  = (f'{config.BASE_DATA_PATH}/Vectordata/BPR/'
+    file_bpr  = (f'requirement_summary/data/Vectordata/BPR/'
                  f'BufferPenetrationReport__{date.strftime("%d-%m-%Y")}.csv')
 
     missing = [f for f in [file_bor, file_bmr, file_bpr] if not os.path.exists(f)]
@@ -354,6 +356,7 @@ def process_single_date(date_str: str):
         bmr_raw['Plant Code'].astype(str).str.startswith(config.CTP_PLANT_PREFIX)
     ].rename(columns={
         'Item Code': 'SKUCode',
+        'Item Description': 'SKU Description',
         'Pending CCR Qty': 'Requirement',
         'BPP': 'Penetration'
     })

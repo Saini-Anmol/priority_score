@@ -1,0 +1,89 @@
+# V1/Routes/btp_pipeline.py
+# ---------------------------------------------------------------------------
+# BTP PIPELINE ORCHESTRATOR
+# The core controller that chains all 5 business logic stages together 
+# in-memory. Eliminates the need for intermediate Excel files.
+# ---------------------------------------------------------------------------
+
+import os
+
+# Import the 5 core business logic modules from the Reports folder
+from V1.Reports.stage1_demand import run_stage1
+from V1.Reports.stage2_deployment import run_stage2
+from V1.Reports.stage3_refinement import run_stage3
+from V1.Reports.stage4_manual import run_stage4
+from V1.Reports.stage5_yield import run_stage5
+
+# Import the centralized Excel writer from Utilities
+from V1.Utilities.excel_writer import write_final_output
+
+# 🟢 NEW: Import your database connection and upload utilities
+from V1.Setups.connection import get_database_connection
+from V1.Utilities.db_writer import upload_dataframe_to_sql
+
+def run_btp_pipeline(ddmmyyyy: str):
+    """
+    Executes the 5-Stage BTP Pipeline entirely in-memory.
+    
+    Args:
+        ddmmyyyy (str): The target date formatted as DDMMYYYY.
+    """
+    print(f"\n🚀 Initiating BTP Pipeline Orchestration for {ddmmyyyy}...\n")
+
+    # 🟢 NEW: Initialize Database Connection early so Stage 4 can use it to read data
+    print("☁️ Initializing database connection...")
+    db_engine = get_database_connection()
+
+    # ---------------------------------------------------------
+    # STAGE 1: Demand Scoring
+    # ---------------------------------------------------------
+    df_stage1, history_bor = run_stage1(ddmmyyyy)
+    
+    # Safety Check: Stop the pipeline if Stage 1 fails (e.g., missing files)
+    if df_stage1 is None or df_stage1.empty:
+        raise ValueError("Stage 1 failed to generate demand data. Pipeline aborted.")
+
+    # ---------------------------------------------------------
+    # STAGE 2: Machine Deployment Analysis
+    # ---------------------------------------------------------
+    df_stage2 = run_stage2(df_stage1, ddmmyyyy)
+
+    # ---------------------------------------------------------
+    # STAGE 3: Max-Demand Refinement
+    # ---------------------------------------------------------
+    df_stage3 = run_stage3(df_stage2, ddmmyyyy)
+
+    # ---------------------------------------------------------
+    # STAGE 4: Manual / Frontend Integration
+    # 🟢 UPDATED: Passed db_engine into the function so it can read from MySQL
+    # ---------------------------------------------------------
+    df_stage4 = run_stage4(df_stage3, ddmmyyyy, db_engine)
+
+    # ---------------------------------------------------------
+    # STAGE 5: Yield Factor Adjustment
+    # ---------------------------------------------------------
+    final_df = run_stage5(df_stage4)
+
+    # ---------------------------------------------------------
+    # FINAL OUTPUT 1: Write to Excel
+    # ---------------------------------------------------------
+    output_filename = f"vector_final_demand_{ddmmyyyy}.xlsx"
+    print(f"\n💾 Formatting and writing final output to {output_filename}...")
+    
+    write_final_output(
+        final_df=final_df, 
+        history_bor=history_bor, 
+        output_filename=output_filename, 
+        main_sheet_name=ddmmyyyy
+    )
+
+    # ---------------------------------------------------------
+    # FINAL OUTPUT 2: Upload to MySQL Database
+    # 🟢 NEW: Upload the final processed dataframe directly to your DB
+    # ---------------------------------------------------------
+    if db_engine:
+        upload_dataframe_to_sql(
+            df=final_df, 
+            table_name="BTP_Final_Demand",  # You can change this table name if needed!
+            engine=db_engine
+        )
